@@ -5,6 +5,7 @@ import pandas as pd
 import datetime
 import requests
 import os
+import time
 
 def send_telegram(message):
     token = os.getenv("TELEGRAM_TOKEN")
