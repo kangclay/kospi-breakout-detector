@@ -33,7 +33,7 @@ def main():
 
     breakout_stocks = []
 
-    for ticker in tickers[:10]:
+    for ticker in tickers:
         try:
             time.sleep(0.5)
             df = stock.get_market_ohlcv_by_date("20220101", today, ticker)
