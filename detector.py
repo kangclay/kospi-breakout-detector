@@ -33,8 +33,9 @@ def main():
 
     breakout_stocks = []
 
-    for ticker in tickers:
+    for ticker in tickers[:10]:
         try:
+            time.sleep(0.5)
             df = stock.get_market_ohlcv_by_date("20220101", today, ticker)
             if df is None or df.empty:
                 continue
