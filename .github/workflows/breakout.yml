@@ -2,7 +2,7 @@ name: Run KOSPI Breakout Detector
 
 on:
   schedule:
-    - cron: '30 5 * * *'  # 한국시간 14:30 (UTC 기준 05:30)
+    - cron: '30 7 * * *'  # 한국시간 16:30 (UTC 기준 07:30)
   workflow_dispatch:
 
 jobs:
