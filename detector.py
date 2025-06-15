@@ -39,7 +39,8 @@ def main():
     for ticker in tickers:
         try:
             time.sleep(0.5)
-            df = stock.get_market_ohlcv_by_date("20220101", today, ticker)
+            start_date = "20250101"
+            df = stock.get_market_ohlcv_by_date(start_date, today, ticker)
             if df is None or df.empty:
                 continue
             df.reset_index(inplace=True)
