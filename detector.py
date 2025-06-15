@@ -1,5 +1,3 @@
-
-
 from pykrx import stock
 import pandas as pd
 import datetime
@@ -23,10 +21,14 @@ def send_telegram(message):
 def is_breakout(df):
     if df is None or df.empty or len(df) < 21:
         return False
-    today = df.iloc[-1]
-    yesterday = df.iloc[-2]
-    recent_max = df['고가'][:-1].rolling(window=20).max().iloc[-1]
-    return today['고가'] > recent_max and today['종가'] > yesterday['종가']
+
+    df = df.copy()
+    df['20일고가최고'] = df['High'].rolling(window=20).max()
+
+    today_close = df.iloc[-1]['Close']
+    past_20_high = df.iloc[-2]['20일고가최고']
+
+    return today_close > past_20_high
 
 def main():
     today = datetime.datetime.today().strftime('%Y%m%d')
