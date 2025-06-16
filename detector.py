@@ -30,6 +30,15 @@ def is_breakout(df):
 
     return today_close > past_20_high
 
+def is_macd_bullish(df):
+    short_ema = df['Close'].ewm(span=12, adjust=False).mean()
+    long_ema = df['Close'].ewm(span=26, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal = macd.ewm(span=9, adjust=False).mean()
+    df['MACD'] = macd
+    df['Signal'] = signal
+    return df['MACD'].iloc[-1] > df['Signal'].iloc[-1] and df['MACD'].iloc[-2] <= df['Signal'].iloc[-2]
+
 def main():
     today = datetime.datetime.today().strftime('%Y%m%d')
     tickers = stock.get_market_ticker_list(today, market="KOSPI")
@@ -39,13 +48,12 @@ def main():
     for ticker in tickers:
         try:
             time.sleep(0.5)
-            start_date = "20250101"
-            df = stock.get_market_ohlcv_by_date(start_date, today, ticker)
+            df = stock.get_market_ohlcv_by_date("20220101", today, ticker)
             if df is None or df.empty:
                 continue
             df.reset_index(inplace=True)
             df = df.rename(columns={"시가": "Open", "고가": "High", "저가": "Low", "종가": "Close", "거래량": "Volume"})
-            if is_breakout(df):
+            if is_breakout(df) and is_macd_bullish(df):
                 name = stock.get_market_ticker_name(ticker)
                 breakout_stocks.append(f"{name} ({ticker})")
         except Exception as e:
