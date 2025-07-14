@@ -22,4 +22,4 @@ def log_selection(ticker: str,
         method,
         f"{close_price:.2f}",
     ]
-    _get_sheet().append_row(row, value_input_option="USER_ENTERED")
+    _get_sheet().append_row(row, value_input_option="USER_ENTERED",table_range="A:D")

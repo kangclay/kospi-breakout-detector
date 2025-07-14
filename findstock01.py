@@ -5,17 +5,17 @@ from pykrx import stock
 import matplotlib.pyplot as plt
 import requests
 from bs4 import BeautifulSoup
+from sheet_logger import log_selection            # 🆕 시트 기록 헬퍼
 
+# ────────────────────────────────────────────────
 # 분석 기간 설정
-end_date = datetime.today()
+end_date   = datetime.today()
 start_date = end_date - timedelta(days=180)
+start, end = start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
 
-start = start_date.strftime("%Y%m%d")
-end = end_date.strftime("%Y%m%d")
-
-# 코스피 종목 전체
 tickers = stock.get_market_ticker_list(market="KOSPI")
 
+# ────────────────────────────────────────────────
 def calculate_macd(df):
     exp12 = df["종가"].ewm(span=12, adjust=False).mean()
     exp26 = df["종가"].ewm(span=26, adjust=False).mean()
@@ -36,39 +36,9 @@ def detect_volume_surge(df):
     avg_volume = df["거래량"].rolling(window=20).mean()
     return df["거래량"].iloc[-1] > 1.5 * avg_volume.iloc[-2]
 
-def plot_stock_chart(df, ticker, name):
-    df["20MA"] = df["종가"].rolling(window=20).mean()
-    df["60MA"] = df["종가"].rolling(window=60).mean()
-    macd, signal = calculate_macd(df)
+# (plot_stock_chart, get_recent_news 그대로…)
 
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax1.set_title(f"{name} ({ticker})", fontsize=14)
-    ax1.plot(df.index, df["종가"], label="종가", color='black')
-    ax1.plot(df.index, df["20MA"], label="20일선", linestyle="--")
-    ax1.plot(df.index, df["60MA"], label="60일선", linestyle="--")
-    ax1.set_ylabel("가격")
-    ax1.legend(loc="upper left")
-
-    ax2 = ax1.twinx()
-    ax2.bar(df.index, df["거래량"], color='gray', alpha=0.3, label="거래량")
-    ax2.set_ylabel("거래량")
-
-    plt.tight_layout()
-    plt.show()
-
-def get_recent_news(query):
-    url = f"https://finance.naver.com/news/news_search.naver?rcdate=&q={query}&x=0&y=0&sm=title.basic&pd=3"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    res = requests.get(url, headers=headers)
-    soup = BeautifulSoup(res.content, 'html.parser')
-    news_list = soup.select(".newsList li")
-
-    print(f"\n📰 {query} 관련 최근 뉴스")
-    for news in news_list[:5]:
-        title = news.select_one('a').text.strip()
-        link = "https://finance.naver.com" + news.select_one('a')['href']
-        print(f"- {title}\n  ↳ {link}")
-
+# ────────────────────────────────────────────────
 signals = []
 
 for ticker in tickers:
@@ -80,28 +50,43 @@ for ticker in tickers:
         macd_cross = detect_macd_golden_cross(df).iloc[-5:].any()
         ma_cross_1 = detect_ma_golden_cross(df, 5, 20).iloc[-5:].any()
         ma_cross_2 = detect_ma_golden_cross(df, 20, 60).iloc[-5:].any()
-        vol_surge = detect_volume_surge(df)
+        vol_surge  = detect_volume_surge(df)
 
         if macd_cross and (ma_cross_1 or ma_cross_2) and vol_surge:
+            close_price = df["종가"].iloc[-1]
+
+            # 🆕 Google Sheets 기록 (Date | Ticker | Method | ClosePrice)
+            try:
+                log_selection(
+                    ticker=ticker,                # 두 번째 열: 티커 그대로
+                    close_price=close_price,
+                    method="MACD+MA+VOL",       # 방법 구분 태그
+                    when=datetime.today()
+                )
+            except Exception as e:
+                print(f"[{ticker}] 시트 기록 실패: {e}")
+
+            # ↓ 이하 종전 로직(표·그래프·뉴스)용 리스트
             name = stock.get_market_ticker_name(ticker)
             signals.append({
-                "종목명": name,
-                "티커": ticker,
-                "MACD골든크로스": macd_cross,
+                "종목명":           name,
+                "티커":             ticker,
+                "MACD골든크로스":   macd_cross,
                 "이평선골든크로스": ma_cross_1 or ma_cross_2,
-                "거래량급증": vol_surge
+                "거래량급증":       vol_surge
             })
-    except:
+    except Exception as e:
+        print(f"[{ticker}] 데이터 오류: {e}")
         continue
 
-# 결과 출력
+# 결과 출력·시각화 부분은 그대로 유지
 signal_df = pd.DataFrame(signals)
 print(signal_df)
 
 if not signal_df.empty:
-    ex = signal_df.iloc[0]
-    df_ex = stock.get_market_ohlcv_by_date(start, end, ex['티커'])
-    plot_stock_chart(df_ex, ex['티커'], ex['종목명'])
-    get_recent_news(ex['종목명'])
+    ex    = signal_df.iloc[0]
+    df_ex = stock.get_market_ohlcv_by_date(start, end, ex["티커"])
+    plot_stock_chart(df_ex, ex["티커"], ex["종목명"])
+    get_recent_news(ex["종목명"])
 else:
     print("시그널 감지된 종목이 없습니다.")
