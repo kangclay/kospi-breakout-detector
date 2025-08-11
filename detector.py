@@ -52,14 +52,41 @@ def _add_extras(df: pd.DataFrame) -> pd.DataFrame:
     d["atr14"] = tr.rolling(14, min_periods=14).mean()
     return d
 
-def _vol_spike_today(d: pd.DataFrame, mult: float = VOL_MULT) -> bool:
-    if len(d) < 21:
+
+# ──────────────────────────────────────────────────────────────
+# 3배 거래증가 + 3% 이상 양봉 + 6개월(120거래일) 전고점 돌파
+#  - 거래량: 오늘 Volume ≥ 3.0 × (전일 기준 20일 평균)
+#  - 캔들:  (Close/Open - 1) ≥ 0.03  (양봉 3% 이상)
+#  - 돌파:  오늘 종가 > 어제까지의 120일 고가(룩어헤드 방지)
+
+def is_vol3_candle3_breakout6m(df: pd.DataFrame,
+                               vol_mult: float = 3.0,
+                               win: int = 120) -> bool:
+    if df is None or df.empty or len(df) < max(20, win) + 2:
         return False
-    x = _add_extras(d)
+    x = _add_extras(df)
+
+    # 거래량 급등 (전일 기준 20일 평균)
     vp = x["vol20_prev"].iloc[-1]
     if pd.isna(vp) or vp <= 0:
         return False
-    return float(x["Volume"].iloc[-1]) >= mult * float(vp)
+    if float(x["Volume"].iloc[-1]) < vol_mult * float(vp):
+        return False
+
+    # 3% 이상 양봉
+    open_i  = float(x["Open"].iloc[-1])
+    close_i = float(x["Close"].iloc[-1])
+    if open_i <= 0:
+        return False
+    if not (close_i > open_i and (close_i / open_i - 1.0) >= 0.03):
+        return False
+
+    # 6개월(120거래일) 전고점 돌파: 오늘 종가 > 어제까지의 win일 고가
+    high_win = x["High"].rolling(win, min_periods=win).max()
+    prev_high = high_win.shift(1).iloc[-1]
+    if pd.isna(prev_high):
+        return False
+    return bool(close_i > float(prev_high))
 
 # ──────────────────────────────────────────────────────────────
 # (업데이트) 당일 '최초' 돌파만 True, 기본 window=40
@@ -137,6 +164,7 @@ def main() -> None:
 
     breakout_list = []  # [📈 40일 돌파 + MACD (당일 최초)]
     trend_list = []   # [📈 ma2060_atr + VOL spike]
+    power_list = []  # [⚡ VOL≥3x + Bullish≥3% + 120D Breakout]
 
     for ticker in tickers:
         try:
@@ -180,6 +208,19 @@ def main() -> None:
                 except Exception as e:
                     print(f"[{ticker}] 시트 기록 오류: {e}")
 
+            # ── 3) VOL×3 + 양봉3% + 120D 전고점 돌파
+            if is_vol3_candle3_breakout6m(df, vol_mult=3.0, win=120):
+                power_list.append(f"{name} ({ticker})")
+                try:
+                    log_selection(
+                        ticker=ticker,
+                        close_price=close_price,
+                        method="VOL≥3x+Bull≥3%+Breakout120(PrevHigh)",
+                        when=today
+                    )
+                except Exception as e:
+                    print(f"[{ticker}] 시트 기록 오류: {e}")
+
         except Exception as e:
             print(f"[{ticker}] 데이터 처리 오류: {e}")
 
@@ -193,6 +234,10 @@ def main() -> None:
     if trend_list:
         lines.append(f"[📈 Trend: MA20>MA60 & ATR/Close∈[1.5%,6%] + VOL≥{VOL_MULT}x]")
         lines.extend(trend_list)
+
+    if power_list:
+        lines.append("[⚡ VOL≥3x + Bull≥3% + 120D Breakout]")
+        lines.extend(power_list)
 
     if not lines:
         lines = ["📉 오늘은 '당일 최초' 신호가 없습니다."]
