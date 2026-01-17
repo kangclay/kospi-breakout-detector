@@ -1,0 +1,33 @@
+name: Stock Analysis Bot
+
+on:
+  schedule:
+    # UTC 09:00 = KST 18:00 (월~금)
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch: # 깃허브 웹에서 버튼 눌러서 수동 실행 가능
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 저장소 코드 가져오기
+      uses: actions/checkout@v3
+
+    - name: 파이썬 설정하기
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 라이브러리 설치하기
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 봇 실행하기
+      env:
+        # 깃허브 Secrets에 저장된 키를 가져옵니다
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python main.py
