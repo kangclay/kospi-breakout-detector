@@ -11,10 +11,8 @@ CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {'chat_id': CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
-    try: requests.post(url, data=data)
-    except: pass
-
+    data = {'chat_id': CHAT_ID, 'text': message, }
+    
 def get_flag_pattern_stocks(market):
     print(f"\n[{market}] '단테 스타일' 깃발형 돌파 매매 분석 중...")
     stocks = fdr.StockListing(market)
