@@ -18,7 +18,7 @@ def send_telegram(message):
 def get_flag_pattern_stocks(market):
     print(f"\n[{market}] '단테 스타일' 깃발형 돌파 매매 분석 중...")
     stocks = fdr.StockListing(market)
-    # stocks = stocks.head(500) # 테스트 시 주석 해제 (속도 향상)
+     stocks = stocks.head(100) # 테스트 시 주석 해제 (속도 향상)
     
     results = []
     
