@@ -6,11 +6,39 @@ import sys
 import io
 from datetime import datetime, timedelta
 import time
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # 1. 설정
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+
+# 구글 시트 설정 (본인의 환경에 맞게 수정)
+JSON_FILE = 'credentials.json' 
+SHEET_NAME = '주식알림기록'      
+
+def save_to_google_sheet(data_list):
+    """구글 시트에 분석 결과 기록 (gspread 사용)"""
+    if not data_list:
+        return
+    
+    try:
+        # 인증 및 시트 열기
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
+        client = gspread.authorize(creds)
+        
+        # 시트 이름으로 열기
+        spreadsheet = client.open(SHEET_NAME)
+        sheet = spreadsheet.get_worksheet(0) # 첫 번째 탭
+        
+        # 데이터 추가 (append_rows는 여러 줄을 한 번에 추가합니다)
+        sheet.append_rows(data_list)
+        print(f"📊 구글 시트에 {len(data_list)}건 기록 완료")
+        
+    except Exception as e:
+        print(f"구글 시트 기록 에러: {e}")
 
 def send_telegram(message):
     """메시지 전송 함수"""
@@ -19,132 +47,113 @@ def send_telegram(message):
     data = {'chat_id': CHAT_ID, 'text': message}
     try:
         requests.post(url, data=data)
-        time.sleep(1)
+        time.sleep(1) # 전송 안정성을 위한 대기
     except Exception as e:
         print(f"전송 에러: {e}")
 
 def analyze_market(market_name, ticker_list):
-    """시장별 분석 함수 (한국/미국 통합)"""
+    """시장별 분석 및 시트 데이터 생성"""
     print(f"\n[{market_name}] {len(ticker_list)}개 종목 분석 시작...")
     
     results = []
-    
-    # 미국 주식은 50일선 손절이 더 잘 맞으므로 로직 분기 처리 가능
-    # 여기서는 검증된 공통 로직(3달 박스권 + 2배 거래량) 사용
+    sheet_rows = []
     
     for idx, row in ticker_list.iterrows():
-        # 한국/미국 컬럼명 차이 처리
-        if 'Symbol' in row: code = row['Symbol'] # 미국
-        else: code = row['Code'] # 한국
-            
+        code = row['Symbol'] if 'Symbol' in row else row['Code']
         name = row['Name']
         
         try:
-            # 150일치 데이터 (미국장은 가끔 데이터가 늦게 들어올 수 있어 예외처리)
-            df = fdr.DataReader(code, start=datetime.now() - timedelta(days=150))
+            df = fdr.DataReader(code, start=(datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d'))
             if len(df) < 120: continue
             
             # 지표 계산
             df['MA10'] = df['Close'].rolling(window=10).mean()
             df['MA20'] = df['Close'].rolling(window=20).mean()
-            df['MA60'] = df['Close'].rolling(window=60).mean() # 60일(분기선)
+            df['MA60'] = df['Close'].rolling(window=60).mean()
             
             curr = df.iloc[-1]
             prev = df.iloc[-2]
             
-            # [조건 1] 정배열 (10 > 20 > 60)
+            # [조건 1] 정배열
             if not (curr['MA10'] > curr['MA20'] > curr['MA60']): continue
             
-            # [조건 2] 수급: 양봉 20개 이상 (매집 흔적)
+            # [조건 2] 수급 (최근 40일 중 양봉 20개 이상)
             recent_40 = df.iloc[-40:]
-            green_cnt = len(recent_40[recent_40['Close'] > recent_40['Open']])
-            if green_cnt < 20: continue 
+            if len(recent_40[recent_40['Close'] > recent_40['Open']]) < 20: continue 
             
-            # [조건 3] 60일(3달) 박스권 돌파
-            box_range = df['High'].iloc[-61:-1]
-            box_high = box_range.max()
+            # [조건 3] 박스권 돌파
+            box_high = df['High'].iloc[-61:-1].max()
             
-            # 오늘 종가가 신고가 돌파 (15% 이상 급등은 추격매수 주의)
             if curr['Close'] > box_high and curr['Close'] < box_high * 1.15:
+                # [조건 4] 거래량 폭발
+                vol_mul = 1.5 if market_name in ['S&P500', 'NASDAQ'] else 2.0
+                vol_ratio = int(curr['Volume']/prev['Volume']*100)
                 
-                # [조건 4] 거래량 폭발 (미국은 1.5배, 한국은 2.0배 적용)
-                # 시장별로 거래량 특성이 다르므로 유동적 적용
-                vol_multiplier = 1.5 if market_name in ['S&P500', 'NASDAQ'] else 2.0
-                
-                if curr['Volume'] > prev['Volume'] * vol_multiplier:
-                    print(f"💎 포착: {name}")
-                    
-                    # 화폐 단위 표시
+                if curr['Volume'] > prev['Volume'] * vol_mul:
                     currency = "$" if market_name in ['S&P500', 'NASDAQ'] else "원"
-                    
-                    # 네이버 증권 링크 (해외/국내 구분)
-                    if currency == "$":
-                        link = f"https://m.stock.naver.com/worldstock/stock/{code}/total"
-                    else:
-                        link = f"https://m.stock.naver.com/domestic/stock/{code}/total"
+                    link = f"https://m.stock.naver.com/{'world' if currency=='$' else 'domestic'}/stock/{code}/total"
 
+                    # 텔레그램 메시지
                     msg = (f"💎 {name} ({code})\n"
                            f"가: {curr['Close']:,.0f}{currency}\n"
-                           f"거: 전일대비 {int(curr['Volume']/prev['Volume']*100)}%\n"
-                           f"손(60일): {int(curr['MA60']):,.0f}\n"
-                           f"익(20일): {int(curr['MA20']):,.0f} 깨지면\n"
+                           f"거: {vol_ratio}%\n"
                            f"{link}")
                     results.append(msg)
+                    
+                    # 구글 시트 데이터 행 (날짜, 시장, 이름, 코드, 가격, 거래량비율, 링크)
+                    sheet_rows.append([
+                        datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        market_name, name, code, curr['Close'], f"{vol_ratio}%", link
+                    ])
         except:
             continue
             
-    return results
+    return results, sheet_rows
 
 def main():
     print("🚀 글로벌 주식 비서 실행...")
-    send_telegram(f"🚀 {datetime.now().strftime('%Y-%m-%d')} 글로벌 주도주 리포트 🚀")
+    send_telegram(f"🚀 {datetime.now().strftime('%Y-%m-%d')} 주도주 분석 리포트")
     
     all_picks = []
+    all_sheet_data = []
 
-    # 1. 한국 시장 (KOSPI / KOSDAQ)
-    # 속도를 위해 테스트 시엔 head(100) 유지, 실전엔 제거
-    try:
-        kospi_list = fdr.StockListing('KOSPI') #.head(200) 
-        kosdaq_list = fdr.StockListing('KOSDAQ') #.head(200)
-        
-        k_picks = analyze_market('KOSPI', kospi_list)
-        q_picks = analyze_market('KOSDAQ', kosdaq_list)
-        
-        if k_picks: all_picks.append("\n🔴 [KOSPI]") + all_picks.extend(k_picks)
-        if q_picks: all_picks.append("\n🔵 [KOSDAQ]") + all_picks.extend(q_picks)
-    except Exception as e:
-        print(f"한국장 분석 중 에러: {e}")
+    # 분석 대상 설정
+    market_targets = [
+        ('KOSPI', 'KOSPI'),
+        ('KOSDAQ', 'KOSDAQ'),
+        ('S&P500', 'S&P500')
+    ]
 
-    # 2. 미국 시장 (S&P500)
-    # NASDAQ 전체는 너무 많아서(4000개) S&P500과 NASDAQ100 위주로 봄
-    try:
-        sp500_list = fdr.StockListing('S&P500')
-        # S&P500은 종목 수가 적절(500개)하여 전체 스캔 가능
-        us_picks = analyze_market('S&P500', sp500_list)
-        
-        if us_picks: 
-            all_picks.append("\n🇺🇸 [US S&P500]")
-            all_picks.extend(us_picks)
-    except Exception as e:
-        print(f"미국장 분석 중 에러: {e}")
+    for label, fdr_code in market_targets:
+        try:
+            target_list = fdr.StockListing(fdr_code)
+            picks, rows = analyze_market(label, target_list)
+            
+            if picks:
+                all_picks.append(f"\n📍 [{label}]")
+                all_picks.extend(picks)
+                all_sheet_data.extend(rows)
+        except Exception as e:
+            print(f"{label} 분석 에러: {e}")
 
-    # 3. 결과 전송
-    if not all_picks:
-        send_telegram("오늘은 전 세계적으로 쉴 때입니다. (발굴 종목 없음)")
-        return
-
-    # 분할 전송
-    msg_buffer = ""
-    for item in all_picks:
-        if len(msg_buffer) + len(item) > 3000:
+    # 결과 처리
+    if all_picks:
+        # 1. 텔레그램 전송
+        msg_buffer = ""
+        for item in all_picks:
+            if len(msg_buffer) + len(item) > 3500:
+                send_telegram(msg_buffer)
+                msg_buffer = ""
+            msg_buffer += item + "\n\n"
+        if msg_buffer:
             send_telegram(msg_buffer)
-            msg_buffer = ""
-        msg_buffer += item + "\n\n"
-        
-    if msg_buffer:
-        send_telegram(msg_buffer)
+            
+        # 2. 구글 시트 기록
+        save_to_google_sheet(all_sheet_data)
+    else:
+        send_telegram("오늘은 발굴된 종목이 없습니다.")
 
-    print("✅ 분석 완료")
+    print("✅ 모든 작업 완료")
 
 if __name__ == "__main__":
     main()
