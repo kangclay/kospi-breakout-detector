@@ -6,154 +6,166 @@ import sys
 import io
 from datetime import datetime, timedelta
 import time
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import numpy as np
 
 # 1. 설정
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# 구글 시트 설정 (본인의 환경에 맞게 수정)
-JSON_FILE = 'credentials.json' 
-SHEET_NAME = '주식알림기록'      
-
-def save_to_google_sheet(data_list):
-    """구글 시트에 분석 결과 기록 (gspread 사용)"""
-    if not data_list:
-        return
-    
-    try:
-        # 인증 및 시트 열기
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
-        client = gspread.authorize(creds)
-        
-        # 시트 이름으로 열기
-        spreadsheet = client.open(SHEET_NAME)
-        sheet = spreadsheet.get_worksheet(0) # 첫 번째 탭
-        
-        # 데이터 추가 (append_rows는 여러 줄을 한 번에 추가합니다)
-        sheet.append_rows(data_list)
-        print(f"📊 구글 시트에 {len(data_list)}건 기록 완료")
-        
-    except Exception as e:
-        print(f"구글 시트 기록 에러: {e}")
-
 def send_telegram(message):
-    """메시지 전송 함수"""
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {'chat_id': CHAT_ID, 'text': message}
+    data = {'chat_id': CHAT_ID, 'text': message, 'disable_web_page_preview': True}
     try:
         requests.post(url, data=data)
-        time.sleep(1) # 전송 안정성을 위한 대기
+        time.sleep(1)
     except Exception as e:
         print(f"전송 에러: {e}")
 
-def analyze_market(market_name, ticker_list):
-    """시장별 분석 및 시트 데이터 생성"""
-    print(f"\n[{market_name}] {len(ticker_list)}개 종목 분석 시작...")
+# RSI 계산 함수 (백테스트와 동일 로직)
+def calculate_rsi(series, period=14):
+    delta = series.diff(1)
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def analyze_market_ranking(market_name, ticker_list):
+    print(f"\n[{market_name}] 랭킹 시스템 가동 중...")
     
-    results = []
-    sheet_rows = []
+    candidates = [] # 1차 합격자 저장소
     
     for idx, row in ticker_list.iterrows():
-        code = row['Symbol'] if 'Symbol' in row else row['Code']
+        if 'Symbol' in row: code = row['Symbol'] # 미국
+        else: code = row['Code'] # 한국
         name = row['Name']
         
         try:
-            df = fdr.DataReader(code, start=(datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d'))
+            # 백테스트와 동일하게 150일 데이터 확보
+            df = fdr.DataReader(code, start=datetime.now() - timedelta(days=150))
             if len(df) < 120: continue
             
-            # 지표 계산
+            # --- 지표 계산 ---
             df['MA10'] = df['Close'].rolling(window=10).mean()
             df['MA20'] = df['Close'].rolling(window=20).mean()
             df['MA60'] = df['Close'].rolling(window=60).mean()
+            df['RSI'] = calculate_rsi(df['Close'])
             
             curr = df.iloc[-1]
             prev = df.iloc[-2]
             
-            # [조건 1] 정배열
+            # [필터 1] 정배열 + RSI 50 이상 (추세 살아있음)
             if not (curr['MA10'] > curr['MA20'] > curr['MA60']): continue
-            
-            # [조건 2] 수급 (최근 40일 중 양봉 20개 이상)
-            recent_40 = df.iloc[-40:]
-            if len(recent_40[recent_40['Close'] > recent_40['Open']]) < 20: continue 
-            
-            # [조건 3] 박스권 돌파
-            box_high = df['High'].iloc[-61:-1].max()
-            
-            if curr['Close'] > box_high and curr['Close'] < box_high * 1.15:
-                # [조건 4] 거래량 폭발
-                vol_mul = 1.5 if market_name in ['S&P500', 'NASDAQ'] else 2.0
-                vol_ratio = int(curr['Volume']/prev['Volume']*100)
-                
-                if curr['Volume'] > prev['Volume'] * vol_mul:
-                    currency = "$" if market_name in ['S&P500', 'NASDAQ'] else "원"
-                    link = f"https://m.stock.naver.com/{'world' if currency=='$' else 'domestic'}/stock/{code}/total"
+            if curr['RSI'] < 50: continue
 
-                    # 텔레그램 메시지
-                    msg = (f"💎 {name} ({code})\n"
-                           f"가: {curr['Close']:,.0f}{currency}\n"
-                           f"거: {vol_ratio}%\n"
-                           f"{link}")
-                    results.append(msg)
+            # [필터 2] 수급: 양봉 20개 이상 (매집 흔적)
+            recent_40 = df.iloc[-40:]
+            green_cnt = len(recent_40[recent_40['Close'] > recent_40['Open']])
+            if green_cnt < 20: continue 
+            
+            # [필터 3] 60일 박스권 돌파
+            box_range = df['High'].iloc[-61:-1]
+            box_high = box_range.max()
+            
+            # 15% 이상 급등은 추격매수 위험으로 제외
+            if curr['Close'] > box_high and curr['Close'] < box_high * 1.15:
+                
+                # [필터 4] 거래량 폭발 (최소 1.5배)
+                vol_ratio = curr['Volume'] / prev['Volume']
+                if vol_ratio >= 1.5:
+                    # 1차 합격! 후보군에 등록
+                    print(f"  -> 후보 포착: {name} (거래량 {vol_ratio:.1f}배)")
                     
-                    # 구글 시트 데이터 행 (날짜, 시장, 이름, 코드, 가격, 거래량비율, 링크)
-                    sheet_rows.append([
-                        datetime.now().strftime('%Y-%m-%d %H:%M'),
-                        market_name, name, code, curr['Close'], f"{vol_ratio}%", link
-                    ])
+                    candidates.append({
+                        'code': code,
+                        'name': name,
+                        'price': curr['Close'],
+                        'vol_ratio': vol_ratio, # 랭킹 산정 기준
+                        'rsi': curr['RSI'],
+                        'ma60': curr['MA60'],
+                        'ma20': curr['MA20']
+                    })
         except:
             continue
             
-    return results, sheet_rows
+    # --- [Top 5 랭킹 선별] ---
+    if not candidates:
+        return []
+        
+    # 거래량 증가율(폭발력) 순으로 내림차순 정렬
+    candidates.sort(key=lambda x: x['vol_ratio'], reverse=True)
+    
+    # 상위 5개만 최종 선발
+    final_picks = candidates[:5]
+    
+    # 메시지 생성
+    msg_list = []
+    for p in final_picks:
+        currency = "$" if market_name in ['S&P500', 'NASDAQ'] else "원"
+        if currency == "$":
+            link = f"https://m.stock.naver.com/worldstock/stock/{p['code']}/total"
+        else:
+            link = f"https://m.stock.naver.com/domestic/stock/{p['code']}/total"
+            
+        msg = (f"🏆 {p['name']} ({p['code']})\n"
+               f"가: {p['price']:,.0f}{currency}\n"
+               f"힘: 거래량 {p['vol_ratio']:.1f}배 / RSI {p['rsi']:.0f}\n"
+               f"손(60일): {int(p['ma60']):,.0f} / 익(20일): {int(p['ma20']):,.0f}\n"
+               f"{link}")
+        msg_list.append(msg)
+        
+    return msg_list
 
 def main():
-    print("🚀 글로벌 주식 비서 실행...")
-    send_telegram(f"🚀 {datetime.now().strftime('%Y-%m-%d')} 주도주 분석 리포트")
+    print("🚀 Top-Ranking 봇 실행...")
+    send_telegram(f"🚀 {datetime.now().strftime('%Y-%m-%d')} 주도주 Top 5 리포트 🚀\n(RSI+박스돌파+거래량랭킹)")
     
     all_picks = []
-    all_sheet_data = []
 
-    # 분석 대상 설정
-    market_targets = [
-        ('KOSPI', 'KOSPI'),
-        ('KOSDAQ', 'KOSDAQ'),
-        ('S&P500', 'S&P500')
-    ]
+    # 1. 한국 시장 (KOSPI / KOSDAQ) - 상위 200개 대상 (백테스트 환경과 유사하게)
+    try:
+        kospi_list = fdr.StockListing('KOSPI').head(200)
+        kosdaq_list = fdr.StockListing('KOSDAQ').head(200)
+        
+        k_picks = analyze_market_ranking('KOSPI', kospi_list)
+        q_picks = analyze_market_ranking('KOSDAQ', kosdaq_list)
+        
+        if k_picks: all_picks.append("\n🔴 [KOSPI Top 5]") + all_picks.extend(k_picks)
+        if q_picks: all_picks.append("\n🔵 [KOSDAQ Top 5]") + all_picks.extend(q_picks)
+    except Exception as e:
+        print(f"한국장 에러: {e}")
 
-    for label, fdr_code in market_targets:
-        try:
-            target_list = fdr.StockListing(fdr_code)
-            picks, rows = analyze_market(label, target_list)
-            
-            if picks:
-                all_picks.append(f"\n📍 [{label}]")
-                all_picks.extend(picks)
-                all_sheet_data.extend(rows)
-        except Exception as e:
-            print(f"{label} 분석 에러: {e}")
+    # 2. 미국 시장 (S&P500)
+    try:
+        sp500_list = fdr.StockListing('S&P500')
+        us_picks = analyze_market_ranking('S&P500', sp500_list)
+        
+        if us_picks: 
+            all_picks.append("\n🇺🇸 [US S&P500 Top 5]")
+            all_picks.extend(us_picks)
+    except Exception as e:
+        print(f"미국장 에러: {e}")
 
-    # 결과 처리
-    if all_picks:
-        # 1. 텔레그램 전송
-        msg_buffer = ""
-        for item in all_picks:
-            if len(msg_buffer) + len(item) > 3500:
-                send_telegram(msg_buffer)
-                msg_buffer = ""
-            msg_buffer += item + "\n\n"
-        if msg_buffer:
+    # 3. 전송
+    if not all_picks:
+        send_telegram("오늘은 쉴 때입니다. (조건 만족 종목 없음)")
+        return
+
+    msg_buffer = ""
+    for item in all_picks:
+        if len(msg_buffer) + len(item) > 3000:
             send_telegram(msg_buffer)
-            
-        # 2. 구글 시트 기록
-        save_to_google_sheet(all_sheet_data)
-    else:
-        send_telegram("오늘은 발굴된 종목이 없습니다.")
+            msg_buffer = ""
+        msg_buffer += item + "\n\n"
+        
+    if msg_buffer:
+        send_telegram(msg_buffer)
 
-    print("✅ 모든 작업 완료")
+    print("✅ 완료")
 
 if __name__ == "__main__":
     main()
