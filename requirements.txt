@@ -1,7 +1,6 @@
-finance-datareader
-pandas
-requests
-lxml
-openpyxl
-gspread
-oauth2client
+pandas<3
+requests>=2.32,<2.34
+pykrx==1.2.4
+gspread==6.2.1
+google-auth>=2.48,<3
+openpyxl==3.1.5
