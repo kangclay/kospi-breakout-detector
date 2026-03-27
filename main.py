@@ -1,3 +1,5 @@
+# LEGACY: 운영용 아님. GitHub Actions에서는 detector.py만 실행함.
+
 import FinanceDataReader as fdr
 import pandas as pd
 import requests
