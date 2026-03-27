@@ -18,6 +18,7 @@ REQUEST_SLEEP_SEC = 0.20
 # 데이터 조회 범위
 FETCH_LOOKBACK_DAYS = 500
 FETCH_FALLBACK_DAYS = 7
+TICKER_FALLBACK_DAYS = 10
 
 # ──────────────────────────────────────────────────────────────
 # Strategy presets
@@ -192,6 +193,35 @@ def _fetch_recent_ohlcv(
             print(f"[{ticker}] OHLCV 조회 실패 ({target_str}): {e}")
 
     return pd.DataFrame()
+
+
+def _fetch_recent_tickers(
+    market: str,
+    end_dt: datetime.datetime,
+    max_fallback_days: int = TICKER_FALLBACK_DAYS,
+) -> tuple[str, list[str]]:
+    """
+    market의 최근 유효 영업일 티커 목록을 가져온다.
+    pykrx 내부의 '최근 영업일 자동 계산'에 의존하지 않고,
+    직접 날짜를 넣어 하루씩 뒤로 가며 시도한다.
+    """
+    for delta in range(max_fallback_days + 1):
+        target_dt = end_dt - datetime.timedelta(days=delta)
+        target_str = target_dt.strftime("%Y%m%d")
+
+        try:
+            tickers = stock.get_market_ticker_list(date=target_str, market=market)
+            if tickers:
+                print(f"[INFO] ticker market={market} date={target_str} count={len(tickers)}")
+                return target_str, tickers
+            else:
+                print(f"[WARN] empty ticker list market={market} date={target_str}")
+        except Exception as e:
+            print(f"[WARN] ticker fetch failed market={market} date={target_str}: {e}")
+
+    raise RuntimeError(
+        f"{market} 최근 {max_fallback_days}일 내 유효한 티커 목록을 찾지 못했습니다."
+    )
 
 
 def _safe_log_selection(
@@ -452,7 +482,12 @@ def main() -> None:
     print(f"[INFO] now_kst={now_kst.isoformat()}")
     print(f"[INFO] run_date_str={run_date_str}")
 
-    tickers = stock.get_market_ticker_list(market="KOSPI")
+    ticker_date_str, tickers = _fetch_recent_tickers(
+        market="KOSPI",
+        end_dt=now_kst,
+        max_fallback_days=TICKER_FALLBACK_DAYS,
+    )
+    print(f"[INFO] KOSPI ticker date={ticker_date_str}")
     print(f"[INFO] KOSPI ticker count={len(tickers)}")
 
     breakout_list = []
@@ -502,7 +537,13 @@ def main() -> None:
             non_empty_count += 1
 
             x = _add_extras(df)
-            name = stock.get_market_ticker_name(ticker)
+
+            try:
+                name = stock.get_market_ticker_name(ticker)
+            except Exception as e:
+                print(f"[WARN] name lookup failed {ticker}: {e}")
+                name = ticker
+
             close_price = float(x["Close"].iloc[-1])
 
             data_date = pd.to_datetime(x["Date"].iloc[-1]).to_pydatetime()
@@ -596,9 +637,10 @@ def main() -> None:
     asof_date_str = latest_data_date.strftime("%Y%m%d") if latest_data_date else "N/A"
 
     lines = []
-    lines.append(f"📌 KOSPI detector 결과")
+    lines.append("📌 KOSPI detector 결과")
     lines.append(f"- 실행일시: {now_kst.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    lines.append(f"- 데이터 기준일: {asof_date_str}")
+    lines.append(f"- 티커 기준일: {ticker_date_str}")
+    lines.append(f"- 가격 데이터 기준일: {asof_date_str}")
     lines.append("")
 
     if breakout_list:
