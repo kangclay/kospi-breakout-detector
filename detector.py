@@ -18,7 +18,9 @@ REQUEST_SLEEP_SEC = 0.20
 # 데이터 조회 범위
 FETCH_LOOKBACK_DAYS = 500
 FETCH_FALLBACK_DAYS = 7
-TICKER_FALLBACK_DAYS = 10
+
+# 티커 CSV
+TICKER_CSV_PATH = "kospi_tickers.csv"
 
 # ──────────────────────────────────────────────────────────────
 # Strategy presets
@@ -82,7 +84,6 @@ def _split_message(message: str, max_len: int) -> list[str]:
                 chunks.append("\n".join(current).strip())
                 current = [line]
             else:
-                # 한 줄 자체가 너무 긴 경우 강제 자르기
                 for i in range(0, len(line), max_len):
                     chunks.append(line[i:i + max_len])
 
@@ -90,6 +91,58 @@ def _split_message(message: str, max_len: int) -> list[str]:
         chunks.append("\n".join(current).strip())
 
     return chunks
+
+
+# ──────────────────────────────────────────────────────────────
+# CSV 로딩
+def _load_tickers_from_csv(csv_path: str = TICKER_CSV_PATH) -> list[dict]:
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"{csv_path} 파일이 없습니다.")
+
+    df = pd.read_csv(csv_path, dtype=str).fillna("")
+    if df.empty:
+        raise ValueError(f"{csv_path} 파일이 비어 있습니다.")
+
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    if "ticker" in df.columns:
+        ticker_col = "ticker"
+    elif "code" in df.columns:
+        ticker_col = "code"
+    else:
+        raise ValueError(f"{csv_path}에는 ticker 또는 code 컬럼이 필요합니다.")
+
+    name_col = "name" if "name" in df.columns else None
+
+    rows = []
+    seen = set()
+
+    for _, row in df.iterrows():
+        ticker = str(row[ticker_col]).strip()
+        if not ticker:
+            continue
+
+        if ticker.isdigit():
+            ticker = ticker.zfill(6)
+
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+
+        name = ""
+        if name_col:
+            name = str(row[name_col]).strip()
+
+        rows.append({
+            "ticker": ticker,
+            "name": name,
+        })
+
+    if not rows:
+        raise ValueError(f"{csv_path}에서 유효한 티커를 읽지 못했습니다.")
+
+    print(f"[INFO] ticker csv loaded path={csv_path} count={len(rows)}")
+    return rows
 
 
 # ──────────────────────────────────────────────────────────────
@@ -153,7 +206,6 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-    # 날짜 컬럼명이 다를 수 있으니 첫 컬럼 fallback
     if "Date" not in out.columns:
         out = out.rename(columns={out.columns[0]: "Date"})
 
@@ -195,35 +247,6 @@ def _fetch_recent_ohlcv(
     return pd.DataFrame()
 
 
-def _fetch_recent_tickers(
-    market: str,
-    end_dt: datetime.datetime,
-    max_fallback_days: int = TICKER_FALLBACK_DAYS,
-) -> tuple[str, list[str]]:
-    """
-    market의 최근 유효 영업일 티커 목록을 가져온다.
-    pykrx 내부의 '최근 영업일 자동 계산'에 의존하지 않고,
-    직접 날짜를 넣어 하루씩 뒤로 가며 시도한다.
-    """
-    for delta in range(max_fallback_days + 1):
-        target_dt = end_dt - datetime.timedelta(days=delta)
-        target_str = target_dt.strftime("%Y%m%d")
-
-        try:
-            tickers = stock.get_market_ticker_list(date=target_str, market=market)
-            if tickers:
-                print(f"[INFO] ticker market={market} date={target_str} count={len(tickers)}")
-                return target_str, tickers
-            else:
-                print(f"[WARN] empty ticker list market={market} date={target_str}")
-        except Exception as e:
-            print(f"[WARN] ticker fetch failed market={market} date={target_str}: {e}")
-
-    raise RuntimeError(
-        f"{market} 최근 {max_fallback_days}일 내 유효한 티커 목록을 찾지 못했습니다."
-    )
-
-
 def _safe_log_selection(
     ticker: str,
     close_price: float,
@@ -256,18 +279,14 @@ def _vol_spike_today(df: pd.DataFrame, mult: float) -> bool:
 
 
 def is_breakout_today(df: pd.DataFrame, window: int = BREAKOUT_WIN) -> bool:
-    """
-    오늘 종가가 '어제까지의 window일 최고가'를 상향 돌파하고,
-    어제 종가는 '그제까지의 window일 최고가'를 돌파하지 않았을 때만 True.
-    """
     if df is None or df.empty or len(df) < (window + 3):
         return False
 
     d = df.copy()
     roll_max = d["High"].rolling(window=window, min_periods=window).max()
 
-    prev_max_today = roll_max.shift(1)  # 어제까지의 최대
-    prev_max_yday = roll_max.shift(2)   # 그제까지의 최대
+    prev_max_today = roll_max.shift(1)
+    prev_max_yday = roll_max.shift(2)
 
     if pd.isna(prev_max_today.iloc[-1]) or pd.isna(prev_max_yday.iloc[-1]):
         return False
@@ -285,9 +304,6 @@ def is_macd_golden_cross_recent(
     df: pd.DataFrame,
     lookback: int = MACD_RECENT_LOOKBACK,
 ) -> bool:
-    """
-    최근 lookback일 이내 MACD 골든크로스가 1회라도 발생했으면 True.
-    """
     if df is None or df.empty or len(df) < max(35, lookback + 2):
         return False
 
@@ -307,12 +323,6 @@ def is_ma2060_atr_with_volume(
     atr_lo: float = TREND_ATR_LO,
     atr_hi: float = TREND_ATR_HI,
 ) -> bool:
-    """
-    추세추종 프리셋:
-    - MA20 > MA60
-    - ATR/Close in [atr_lo, atr_hi]
-    - 거래량 급등
-    """
     x = _with_extras(df)
     if x is None or x.empty or len(x) < 60:
         return False
@@ -340,12 +350,6 @@ def is_power_breakout(
     candle_pct: float = POWER_CANDLE_PCT,
     win: int = POWER_WIN,
 ) -> bool:
-    """
-    완화 버전:
-    - 거래량: 오늘 Volume ≥ vol_mult × (전일 기준 20일 평균)
-    - 캔들: (Close/Open - 1) ≥ candle_pct
-    - 돌파: 오늘 종가 > 어제까지의 win일 고가
-    """
     x = _with_extras(df)
     if x is None or x.empty or len(x) < max(21, win) + 2:
         return False
@@ -368,10 +372,6 @@ def is_power_breakout(
         return False
 
     return bool(close_i > float(prev_high))
-
-
-def is_backtest_entry_today(df: pd.DataFrame) -> bool:
-    return is_macd_golden_cross_recent(df, lookback=MACD_RECENT_LOOKBACK)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -482,13 +482,8 @@ def main() -> None:
     print(f"[INFO] now_kst={now_kst.isoformat()}")
     print(f"[INFO] run_date_str={run_date_str}")
 
-    ticker_date_str, tickers = _fetch_recent_tickers(
-        market="KOSPI",
-        end_dt=now_kst,
-        max_fallback_days=TICKER_FALLBACK_DAYS,
-    )
-    print(f"[INFO] KOSPI ticker date={ticker_date_str}")
-    print(f"[INFO] KOSPI ticker count={len(tickers)}")
+    ticker_rows = _load_tickers_from_csv(TICKER_CSV_PATH)
+    print(f"[INFO] ticker csv count={len(ticker_rows)}")
 
     breakout_list = []
     trend_list = []
@@ -519,8 +514,10 @@ def main() -> None:
 
     start_date = _make_start_date(now_kst, FETCH_LOOKBACK_DAYS)
 
-    for idx, ticker in enumerate(tickers, start=1):
+    for idx, row in enumerate(ticker_rows, start=1):
         processed += 1
+        ticker = row["ticker"]
+        name = row.get("name", "").strip() or ticker
 
         try:
             time.sleep(REQUEST_SLEEP_SEC)
@@ -535,15 +532,7 @@ def main() -> None:
                 continue
 
             non_empty_count += 1
-
             x = _add_extras(df)
-
-            try:
-                name = stock.get_market_ticker_name(ticker)
-            except Exception as e:
-                print(f"[WARN] name lookup failed {ticker}: {e}")
-                name = ticker
-
             close_price = float(x["Close"].iloc[-1])
 
             data_date = pd.to_datetime(x["Date"].iloc[-1]).to_pydatetime()
@@ -555,7 +544,6 @@ def main() -> None:
             print(f"[{ticker}] 데이터 준비 오류: {e}")
             continue
 
-        # ── 1) Breakout: 40일 돌파 + 최근 5일 MACD GC
         try:
             b = eval_breakout_strategy(x)
 
@@ -577,7 +565,6 @@ def main() -> None:
         except Exception as e:
             print(f"[{ticker}] breakout 오류: {e}")
 
-        # ── 2) Trend: MA20>MA60 & ATR/Close 범위 & 거래량 급등
         try:
             t = eval_trend_strategy(x)
 
@@ -601,7 +588,6 @@ def main() -> None:
         except Exception as e:
             print(f"[{ticker}] trend 오류: {e}")
 
-        # ── 3) Power: 거래량 증가 + 양봉 + 중기 신고가 돌파
         try:
             p = eval_power_strategy(x)
 
@@ -627,19 +613,18 @@ def main() -> None:
 
         if idx % 100 == 0:
             print(
-                f"[INFO] processed={idx}/{len(tickers)} "
+                f"[INFO] processed={idx}/{len(ticker_rows)} "
                 f"breakout={len(breakout_list)} "
                 f"trend={len(trend_list)} "
                 f"power={len(power_list)}"
             )
 
-    # ────────────────── 텔레그램 메시지 구성
     asof_date_str = latest_data_date.strftime("%Y%m%d") if latest_data_date else "N/A"
 
     lines = []
     lines.append("📌 KOSPI detector 결과")
     lines.append(f"- 실행일시: {now_kst.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    lines.append(f"- 티커 기준일: {ticker_date_str}")
+    lines.append(f"- 티커 소스: {TICKER_CSV_PATH}")
     lines.append(f"- 가격 데이터 기준일: {asof_date_str}")
     lines.append("")
 
