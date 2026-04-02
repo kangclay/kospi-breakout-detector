@@ -1,0 +1,23 @@
+{
+  "market": "KOSPI",
+  "days": 180,
+  "entry_set": "macd_gc",
+  "entry": "next_open",
+  "macd_zero_filter": true,
+  "vol_mult": 1.5,
+  "stop_pct": 0.1,
+  "max_hold": 15,
+  "fee_bp": 5.0,
+  "slip_bp": 5.0,
+  "active_tickers": 18,
+  "trade_count": 62,
+  "win_rate_pct": 40.32,
+  "avg_trade_return_pct": 2.26,
+  "cumulative_return_pct": 210.75,
+  "max_drawdown_pct": -28.26,
+  "profit_factor": 2.294,
+  "trailing_stop_count": 28,
+  "dead_cross_count": 25,
+  "max_hold_count": 9,
+  "score": 212.2
+}

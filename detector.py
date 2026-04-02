@@ -1,12 +1,16 @@
-from pykrx import stock
-import pandas as pd
+from pathlib import Path
+
 import datetime
-import time
 import os
-import requests
+import time
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+import requests
+from pykrx import stock
+
 from sheet_logger import log_selection  # Google Sheets 단건 기록
+from strategy_engine import StrategyConfig, detect_live_signals, load_strategy_config
 
 
 # ──────────────────────────────────────────────────────────────
@@ -34,9 +38,9 @@ TREND_ATR_HI = 0.08
 POWER_VOL_MULT = 2.0
 POWER_CANDLE_PCT = 0.02
 POWER_WIN = 60
+DEFAULT_STRATEGY_FILE = Path(__file__).resolve().parent / "reports" / "best_strategy.json"
 
 
-# ──────────────────────────────────────────────────────────────
 def send_telegram(message: str) -> None:
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -92,6 +96,76 @@ def _split_message(message: str, max_len: int) -> list[str]:
 
     return chunks
 
+
+
+def _vol_spike_today(df: pd.DataFrame, mult: float) -> bool:
+    x = _add_extras(df)
+    vp = x["vol20_prev"].iloc[-1]
+    if pd.isna(vp) or vp <= 0:
+        return False
+    return bool(float(x["Volume"].iloc[-1]) >= mult * float(vp))
+
+
+def _load_live_strategy(strategy_path: Path = DEFAULT_STRATEGY_FILE) -> StrategyConfig | None:
+    if not strategy_path.exists():
+        return None
+    try:
+        return load_strategy_config(strategy_path)
+    except Exception as exc:
+        print(f"[strategy-loader] failed path={strategy_path} error={exc}")
+        return None
+
+
+def _build_live_message(strategy: StrategyConfig, selections: list[dict]) -> str:
+    if not selections:
+        return f"[BUY SIGNAL] {strategy.entry_set}\nNo signal today."
+    lines = [
+        f"[BUY SIGNAL] {strategy.entry_set}",
+        f"entry={strategy.entry} stop={strategy.stop_pct} hold={strategy.max_hold} vol={strategy.vol_mult}",
+        "",
+    ]
+    for item in selections:
+        lines.append(f"{item['name']} ({item['ticker']}) close={item['close']:.0f}")
+    return "\n".join(lines)
+
+
+def _run_strategy_detector(
+    now_kst: datetime.datetime,
+    ticker_rows: list[dict],
+    strategy: StrategyConfig,
+    start_date: str,
+) -> bool:
+    selections: list[dict] = []
+
+    for row in ticker_rows:
+        ticker = row["ticker"]
+        name = row.get("name", "").strip() or ticker
+        try:
+            time.sleep(REQUEST_SLEEP_SEC)
+            raw_df = _fetch_recent_ohlcv(
+                ticker=ticker,
+                end_dt=now_kst,
+                start_date=start_date,
+                max_fallback_days=FETCH_FALLBACK_DAYS,
+            )
+            if raw_df is None or raw_df.empty:
+                continue
+            signals = detect_live_signals({ticker: raw_df}, strategy)
+            if not signals:
+                continue
+            close_price = float(raw_df["Close"].iloc[-1])
+            selections.append({"ticker": ticker, "name": name, "close": close_price})
+            _safe_log_selection(
+                ticker=ticker,
+                close_price=close_price,
+                method=f"best_strategy:{strategy.entry_set}",
+                when=now_kst,
+            )
+        except Exception as exc:
+            print(f"[{ticker}] 데이터 처리 오류: {exc}")
+
+    send_telegram(_build_live_message(strategy, selections))
+    return True
 
 # ──────────────────────────────────────────────────────────────
 # CSV 로딩
@@ -484,6 +558,17 @@ def main() -> None:
 
     ticker_rows = _load_tickers_from_csv(TICKER_CSV_PATH)
     print(f"[INFO] ticker csv count={len(ticker_rows)}")
+    start_date = _make_start_date(now_kst, FETCH_LOOKBACK_DAYS)
+    strategy = _load_live_strategy()
+
+    if strategy is not None:
+        _run_strategy_detector(
+            now_kst=now_kst,
+            ticker_rows=ticker_rows,
+            strategy=strategy,
+            start_date=start_date,
+        )
+        return
 
     breakout_list = []
     trend_list = []
@@ -511,8 +596,6 @@ def main() -> None:
         "power_breakout_ok": 0,
         "power_final": 0,
     }
-
-    start_date = _make_start_date(now_kst, FETCH_LOOKBACK_DAYS)
 
     for idx, row in enumerate(ticker_rows, start=1):
         processed += 1
