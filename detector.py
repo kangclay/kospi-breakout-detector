@@ -129,6 +129,18 @@ def _build_live_message(strategy: StrategyConfig, selections: list[dict]) -> str
     return "\n".join(lines)
 
 
+def _resolve_stock_name(ticker: str, fallback_name: str = "") -> str:
+    if fallback_name and fallback_name != ticker:
+        return fallback_name
+    try:
+        resolved = stock.get_market_ticker_name(ticker)
+        if resolved:
+            return resolved
+    except Exception as exc:
+        print(f"[{ticker}] 종목명 조회 오류: {exc}")
+    return fallback_name or ticker
+
+
 def _run_strategy_detector(
     now_kst: datetime.datetime,
     ticker_rows: list[dict],
@@ -139,7 +151,7 @@ def _run_strategy_detector(
 
     for row in ticker_rows:
         ticker = row["ticker"]
-        name = row.get("name", "").strip() or ticker
+        name = _resolve_stock_name(ticker, row.get("name", "").strip())
         try:
             time.sleep(REQUEST_SLEEP_SEC)
             raw_df = _fetch_recent_ohlcv(
