@@ -148,7 +148,7 @@ def main() -> None:
     parser.add_argument("--market", default="KOSPI")
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--limit", type=int, default=80)
-    parser.add_argument("--entry-sets", default="macd_gc,macd_ma_vol,strict_union,trend_long_bull,trend_ma_union,breakout40_gc_today_vol")
+    parser.add_argument("--entry-sets", default="macd_gc,macd_ma_vol,strict_union,trend_long_bull,trend_ma_union,breakout40_gc_today_vol,quant_surge_common")
     parser.add_argument("--stop-pcts", default="0.08,0.1,0.12")
     parser.add_argument("--max-holds", default="10,15,20")
     parser.add_argument("--vol-mults", default="1.5,1.8,2.0")

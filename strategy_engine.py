@@ -22,6 +22,7 @@ ENTRY_PRESET_CHOICES = (
     "trend_high95_macd",
     "gc_today_vol",
     "breakout40_gc_today_vol",
+    "quant_surge_common",
 )
 
 GC_REQUIRED_PRESETS = {
@@ -320,7 +321,55 @@ def passes_entry_preset(
             and df["Close"].iloc[signal_idx - 1] <= df["high40"].shift(2).iloc[signal_idx]
         )
 
+    if preset == "quant_surge_common":
+        required = [
+            df["high40_prev"].iloc[signal_idx],
+            df["Close"].iloc[signal_idx],
+            df["Open"].iloc[signal_idx],
+            df["High"].iloc[signal_idx],
+            df["Low"].iloc[signal_idx],
+            df["ma20"].iloc[signal_idx],
+            df["ma60"].iloc[signal_idx],
+            df["macd"].iloc[signal_idx],
+            df["signal"].iloc[signal_idx],
+            df["vol20_prev"].iloc[signal_idx],
+            df["Volume"].iloc[signal_idx],
+        ]
+        if not _valid(*required):
+            return False
+        close_i = float(df["Close"].iloc[signal_idx])
+        open_i = float(df["Open"].iloc[signal_idx])
+        high_i = float(df["High"].iloc[signal_idx])
+        low_i = float(df["Low"].iloc[signal_idx])
+        range_i = max(high_i - low_i, 1e-9)
+        body_pct = (close_i / open_i) - 1.0 if open_i > 0 else np.nan
+        close_pos = (close_i - low_i) / range_i
+        bullish = close_i > open_i
+        return bool(
+            close_i >= 0.97 * float(df["high40_prev"].iloc[signal_idx])
+            and df["ma20"].iloc[signal_idx] > df["ma60"].iloc[signal_idx]
+            and df["macd"].iloc[signal_idx] > df["signal"].iloc[signal_idx] > 0
+            and df["Volume"].iloc[signal_idx] >= vol_mult * df["vol20_prev"].iloc[signal_idx]
+            and bullish
+            and (body_pct >= 0.02 or close_pos >= 0.70)
+        )
+
     return False
+
+
+def build_quant_surge_strategy() -> StrategyConfig:
+    return StrategyConfig(
+        entry_set="quant_surge_common",
+        stop_pct=0.10,
+        max_hold=15,
+        vol_mult=1.2,
+        entry="next_open",
+        macd_zero_filter=False,
+        market="KOSPI",
+        days=365,
+        fee_bp=5.0,
+        slip_bp=5.0,
+    )
 
 
 def preset_requires_golden_cross(preset: str) -> bool:

@@ -10,7 +10,7 @@ import requests
 from pykrx import stock
 
 from sheet_logger import log_selection  # Google Sheets 단건 기록
-from strategy_engine import StrategyConfig, detect_live_signals, load_strategy_config
+from strategy_engine import StrategyConfig, build_quant_surge_strategy, detect_live_signals, load_strategy_config
 
 
 # ──────────────────────────────────────────────────────────────
@@ -116,17 +116,19 @@ def _load_live_strategy(strategy_path: Path = DEFAULT_STRATEGY_FILE) -> Strategy
         return None
 
 
-def _build_live_message(strategy: StrategyConfig, selections: list[dict]) -> str:
-    if not selections:
-        return f"[BUY SIGNAL] {strategy.entry_set}\nNo signal today."
+def _build_strategy_section(title: str, strategy: StrategyConfig, selections: list[dict]) -> list[str]:
     lines = [
-        f"[BUY SIGNAL] {strategy.entry_set}",
+        f"[{title}] {strategy.entry_set}",
         f"entry={strategy.entry} stop={strategy.stop_pct} hold={strategy.max_hold} vol={strategy.vol_mult}",
-        "",
     ]
-    for item in selections:
-        lines.append(f"{item['name']} ({item['ticker']}) close={item['close']:.0f}")
-    return "\n".join(lines)
+    if selections:
+        lines.append("")
+        for item in selections:
+            lines.append(f"{item['name']} ({item['ticker']}) close={item['close']:.0f}")
+    else:
+        lines.append("")
+        lines.append("No signal today.")
+    return lines
 
 
 def _resolve_stock_name(ticker: str, fallback_name: str = "") -> str:
@@ -141,12 +143,13 @@ def _resolve_stock_name(ticker: str, fallback_name: str = "") -> str:
     return fallback_name or ticker
 
 
-def _run_strategy_detector(
+def _collect_strategy_signals(
     now_kst: datetime.datetime,
     ticker_rows: list[dict],
     strategy: StrategyConfig,
     start_date: str,
-) -> bool:
+    method_tag: str,
+) -> list[dict]:
     selections: list[dict] = []
 
     for row in ticker_rows:
@@ -170,14 +173,12 @@ def _run_strategy_detector(
             _safe_log_selection(
                 ticker=ticker,
                 close_price=close_price,
-                method=f"best_strategy:{strategy.entry_set}",
+                method=f"{method_tag}:{strategy.entry_set}",
                 when=now_kst,
             )
         except Exception as exc:
             print(f"[{ticker}] 데이터 처리 오류: {exc}")
-
-    send_telegram(_build_live_message(strategy, selections))
-    return True
+    return selections
 
 # ──────────────────────────────────────────────────────────────
 # CSV 로딩
@@ -574,12 +575,26 @@ def main() -> None:
     strategy = _load_live_strategy()
 
     if strategy is not None:
-        _run_strategy_detector(
+        best_selections = _collect_strategy_signals(
             now_kst=now_kst,
             ticker_rows=ticker_rows,
             strategy=strategy,
             start_date=start_date,
+            method_tag="best_strategy",
         )
+        quant_strategy = build_quant_surge_strategy()
+        quant_selections = _collect_strategy_signals(
+            now_kst=now_kst,
+            ticker_rows=ticker_rows,
+            strategy=quant_strategy,
+            start_date=start_date,
+            method_tag="quant_surge",
+        )
+        sections = [
+            _build_strategy_section("BUY SIGNAL", strategy, best_selections),
+            _build_strategy_section("QUANT SURGE", quant_strategy, quant_selections),
+        ]
+        send_telegram("\n\n".join("\n".join(section) for section in sections if section))
         return
 
     breakout_list = []

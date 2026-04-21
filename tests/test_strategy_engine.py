@@ -7,6 +7,7 @@ import pandas as pd
 
 from strategy_engine import (
     StrategyConfig,
+    build_quant_surge_strategy,
     load_strategy_config,
     preset_requires_golden_cross,
     summarize_evaluations,
@@ -19,6 +20,14 @@ class StrategyEngineTest(unittest.TestCase):
         self.assertTrue(preset_requires_golden_cross("strict_union"))
         self.assertFalse(preset_requires_golden_cross("trend_ma_union"))
         self.assertFalse(preset_requires_golden_cross("ma2060_atr"))
+        self.assertFalse(preset_requires_golden_cross("quant_surge_common"))
+
+    def test_build_quant_surge_strategy_defaults(self):
+        strategy = build_quant_surge_strategy()
+        self.assertEqual(strategy.entry_set, "quant_surge_common")
+        self.assertEqual(strategy.vol_mult, 1.2)
+        self.assertEqual(strategy.stop_pct, 0.1)
+        self.assertEqual(strategy.max_hold, 15)
 
     def test_load_strategy_config_reads_json(self):
         payload = {

@@ -6,10 +6,12 @@ KOSPI 매수 신호를 탐지하고, 전략을 백테스트해서, 최적 전략
 
 1. `optimize_signals.py`
    여러 진입 프리셋, 손절폭, 최대 보유일, 거래량 배수를 백테스트합니다.
-2. `reports/best_strategy.json`
-   최적 전략 결과를 저장합니다.
-3. `detector.py`
-   `best_strategy.json`이 있으면 그 전략으로 오늘 신호를 탐지합니다.
+2. `analyze_surge_patterns.py`
+   급등 사례를 정의하고 공통 특징과 새 quant surge 전략을 검증합니다.
+3. `reports/best_strategy.json`
+   운영용 최적 전략 결과를 저장합니다.
+4. `detector.py`
+   `best_strategy.json` 기반 신호와 `QUANT SURGE` 별도 섹션을 함께 탐지합니다.
    파일이 없으면 기존 돌파/추세 프리셋 알림으로 fallback 합니다.
 
 ## 로컬 실행
@@ -17,6 +19,7 @@ KOSPI 매수 신호를 탐지하고, 전략을 백테스트해서, 최적 전략
 ```bash
 pip install -r requirements.txt
 python optimize_signals.py --market KOSPI --days 365 --limit 80
+python analyze_surge_patterns.py --market KOSPI --days 365 --limit 20
 python detector.py
 ```
 

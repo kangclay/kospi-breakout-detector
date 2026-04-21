@@ -1,0 +1,260 @@
+{
+  "sample_count": 3700,
+  "targets": {
+    "surge_5_8": {
+      "positive_rate_pct": 15.54,
+      "feature_lift": [
+        {
+          "feature": "near_high95",
+          "pos_rate_pct": 41.74,
+          "neg_rate_pct": 29.98,
+          "lift": 1.392
+        },
+        {
+          "feature": "breakout40",
+          "pos_rate_pct": 11.65,
+          "neg_rate_pct": 5.73,
+          "lift": 2.034
+        },
+        {
+          "feature": "ma20_gt_60",
+          "pos_rate_pct": 79.65,
+          "neg_rate_pct": 78.02,
+          "lift": 1.021
+        },
+        {
+          "feature": "ma5_gt_20_gt_60",
+          "pos_rate_pct": 57.22,
+          "neg_rate_pct": 47.36,
+          "lift": 1.208
+        },
+        {
+          "feature": "macd_bull",
+          "pos_rate_pct": 40.87,
+          "neg_rate_pct": 31.17,
+          "lift": 1.311
+        },
+        {
+          "feature": "vol_1_2",
+          "pos_rate_pct": 37.04,
+          "neg_rate_pct": 23.07,
+          "lift": 1.606
+        },
+        {
+          "feature": "vol_1_5",
+          "pos_rate_pct": 19.3,
+          "neg_rate_pct": 12.42,
+          "lift": 1.555
+        },
+        {
+          "feature": "body_pos_2",
+          "pos_rate_pct": 18.96,
+          "neg_rate_pct": 14.56,
+          "lift": 1.302
+        },
+        {
+          "feature": "close_upper70",
+          "pos_rate_pct": 35.3,
+          "neg_rate_pct": 29.57,
+          "lift": 1.194
+        },
+        {
+          "feature": "atr_ok",
+          "pos_rate_pct": 97.74,
+          "neg_rate_pct": 97.79,
+          "lift": 0.999
+        },
+        {
+          "feature": "rsi_55_75",
+          "pos_rate_pct": 40.52,
+          "neg_rate_pct": 32.77,
+          "lift": 1.237
+        }
+      ]
+    },
+    "surge_10_12": {
+      "positive_rate_pct": 17.3,
+      "feature_lift": [
+        {
+          "feature": "near_high95",
+          "pos_rate_pct": 42.81,
+          "neg_rate_pct": 29.51,
+          "lift": 1.451
+        },
+        {
+          "feature": "breakout40",
+          "pos_rate_pct": 10.47,
+          "neg_rate_pct": 5.85,
+          "lift": 1.79
+        },
+        {
+          "feature": "ma20_gt_60",
+          "pos_rate_pct": 80.16,
+          "neg_rate_pct": 77.88,
+          "lift": 1.029
+        },
+        {
+          "feature": "ma5_gt_20_gt_60",
+          "pos_rate_pct": 56.88,
+          "neg_rate_pct": 47.22,
+          "lift": 1.204
+        },
+        {
+          "feature": "macd_bull",
+          "pos_rate_pct": 40.0,
+          "neg_rate_pct": 31.14,
+          "lift": 1.284
+        },
+        {
+          "feature": "vol_1_2",
+          "pos_rate_pct": 34.69,
+          "neg_rate_pct": 23.27,
+          "lift": 1.491
+        },
+        {
+          "feature": "vol_1_5",
+          "pos_rate_pct": 17.66,
+          "neg_rate_pct": 12.61,
+          "lift": 1.4
+        },
+        {
+          "feature": "body_pos_2",
+          "pos_rate_pct": 17.97,
+          "neg_rate_pct": 14.67,
+          "lift": 1.225
+        },
+        {
+          "feature": "close_upper70",
+          "pos_rate_pct": 37.5,
+          "neg_rate_pct": 28.99,
+          "lift": 1.294
+        },
+        {
+          "feature": "atr_ok",
+          "pos_rate_pct": 98.91,
+          "neg_rate_pct": 97.55,
+          "lift": 1.014
+        },
+        {
+          "feature": "rsi_55_75",
+          "pos_rate_pct": 39.06,
+          "neg_rate_pct": 32.91,
+          "lift": 1.187
+        }
+      ]
+    },
+    "surge_10_15": {
+      "positive_rate_pct": 11.89,
+      "feature_lift": [
+        {
+          "feature": "near_high95",
+          "pos_rate_pct": 44.55,
+          "neg_rate_pct": 30.09,
+          "lift": 1.48
+        },
+        {
+          "feature": "breakout40",
+          "pos_rate_pct": 10.45,
+          "neg_rate_pct": 6.13,
+          "lift": 1.704
+        },
+        {
+          "feature": "ma20_gt_60",
+          "pos_rate_pct": 78.18,
+          "neg_rate_pct": 78.28,
+          "lift": 0.999
+        },
+        {
+          "feature": "ma5_gt_20_gt_60",
+          "pos_rate_pct": 57.5,
+          "neg_rate_pct": 47.73,
+          "lift": 1.205
+        },
+        {
+          "feature": "macd_bull",
+          "pos_rate_pct": 40.0,
+          "neg_rate_pct": 31.69,
+          "lift": 1.262
+        },
+        {
+          "feature": "vol_1_2",
+          "pos_rate_pct": 34.32,
+          "neg_rate_pct": 24.02,
+          "lift": 1.429
+        },
+        {
+          "feature": "vol_1_5",
+          "pos_rate_pct": 18.18,
+          "neg_rate_pct": 12.85,
+          "lift": 1.415
+        },
+        {
+          "feature": "body_pos_2",
+          "pos_rate_pct": 17.5,
+          "neg_rate_pct": 14.94,
+          "lift": 1.171
+        },
+        {
+          "feature": "close_upper70",
+          "pos_rate_pct": 37.95,
+          "neg_rate_pct": 29.45,
+          "lift": 1.289
+        },
+        {
+          "feature": "atr_ok",
+          "pos_rate_pct": 99.09,
+          "neg_rate_pct": 97.61,
+          "lift": 1.015
+        },
+        {
+          "feature": "rsi_55_75",
+          "pos_rate_pct": 40.68,
+          "neg_rate_pct": 33.07,
+          "lift": 1.23
+        }
+      ]
+    }
+  },
+  "quant_surge_validation": {
+    "strategy": {
+      "entry_set": "quant_surge_common",
+      "stop_pct": 0.1,
+      "max_hold": 15,
+      "vol_mult": 1.2,
+      "entry": "next_open",
+      "macd_zero_filter": false,
+      "market": "KOSPI",
+      "days": 365,
+      "fee_bp": 5.0,
+      "slip_bp": 5.0,
+      "score": null
+    },
+    "backtest": {
+      "market": "KOSPI",
+      "days": 365,
+      "entry_set": "quant_surge_common",
+      "entry": "next_open",
+      "macd_zero_filter": false,
+      "vol_mult": 1.2,
+      "stop_pct": 0.1,
+      "max_hold": 15,
+      "fee_bp": 5.0,
+      "slip_bp": 5.0,
+      "active_tickers": 20,
+      "trade_count": 169,
+      "win_rate_pct": 39.05,
+      "avg_trade_return_pct": 0.64,
+      "cumulative_return_pct": 50.46,
+      "max_drawdown_pct": -84.91,
+      "profit_factor": 1.205,
+      "trailing_stop_count": 94,
+      "dead_cross_count": 54,
+      "max_hold_count": 21,
+      "score": 20.14
+    },
+    "live_candidates": [
+      "삼성SDI",
+      "SK텔레콤"
+    ]
+  }
+}
