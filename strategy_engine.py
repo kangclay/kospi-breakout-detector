@@ -24,6 +24,16 @@ ENTRY_PRESET_CHOICES = (
     "breakout40_gc_today_vol",
 )
 
+GC_REQUIRED_PRESETS = {
+    "macd_gc",
+    "macd_ma_vol",
+    "macd_rsi65_gap3",
+    "macd_nodup5_high95",
+    "strict_union",
+    "gc_today_vol",
+    "breakout40_gc_today_vol",
+}
+
 
 @dataclass
 class StrategyConfig:
@@ -313,6 +323,10 @@ def passes_entry_preset(
     return False
 
 
+def preset_requires_golden_cross(preset: str) -> bool:
+    return preset in GC_REQUIRED_PRESETS
+
+
 def simulate_trade(
     df: pd.DataFrame,
     entry_idx: int,
@@ -364,8 +378,9 @@ def evaluate_strategy_on_dataset(
         df = prepare_signal_df(raw_df)
         returns: List[float] = []
         reasons = {"trailing_stop": 0, "dead_cross": 0, "max_hold": 0}
+        need_gc = preset_requires_golden_cross(config.entry_set)
         for i in range(len(df) - 2):
-            if not bool(df["cross_gc"].iloc[i]):
+            if need_gc and not bool(df["cross_gc"].iloc[i]):
                 continue
             if config.macd_zero_filter and float(df["macd"].iloc[i]) <= 0:
                 continue
@@ -453,7 +468,7 @@ def detect_live_signals(dataset: Dict[str, pd.DataFrame], config: StrategyConfig
             continue
         df = prepare_signal_df(raw_df)
         i = len(df) - 1
-        if not bool(df["cross_gc"].iloc[i]):
+        if preset_requires_golden_cross(config.entry_set) and not bool(df["cross_gc"].iloc[i]):
             continue
         if config.macd_zero_filter and float(df["macd"].iloc[i]) <= 0:
             continue

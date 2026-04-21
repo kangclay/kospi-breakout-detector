@@ -5,10 +5,21 @@ from pathlib import Path
 
 import pandas as pd
 
-from strategy_engine import StrategyConfig, load_strategy_config, summarize_evaluations
+from strategy_engine import (
+    StrategyConfig,
+    load_strategy_config,
+    preset_requires_golden_cross,
+    summarize_evaluations,
+)
 
 
 class StrategyEngineTest(unittest.TestCase):
+    def test_preset_requires_golden_cross_only_for_gc_based_presets(self):
+        self.assertTrue(preset_requires_golden_cross("macd_gc"))
+        self.assertTrue(preset_requires_golden_cross("strict_union"))
+        self.assertFalse(preset_requires_golden_cross("trend_ma_union"))
+        self.assertFalse(preset_requires_golden_cross("ma2060_atr"))
+
     def test_load_strategy_config_reads_json(self):
         payload = {
             "entry_set": "strict_union",
