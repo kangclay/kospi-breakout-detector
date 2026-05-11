@@ -45,6 +45,10 @@ python detector.py
 - `TELEGRAM_CHAT_ID`
 - `GSHEET_KEY`
 
+## Google Sheets 기록
+
+추천 종목은 Google Sheets의 `recommendations` 탭에 기록됩니다. 탭이 없으면 자동으로 만들고, `일자 | 티커 | 종목명 | 종가 | 전략` 순서로 남깁니다.
+
 ## 주의
 
 GitHub Actions가 최적 전략을 실제 운영에 쓰려면 `reports/best_strategy.json`을 커밋해 두거나, 최적화 결과를 받아 반영하는 별도 배포 흐름이 필요합니다.

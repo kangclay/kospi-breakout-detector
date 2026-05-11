@@ -1,16 +1,31 @@
 # sheet_logger.py
 from datetime import datetime
 import gspread
+from gspread.exceptions import WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _SHEET_ID = "1T_Yj8wSx2V0XoTmwTtqetZGXi495sc6Saj0bpRE85Rg"          # /d/와 /edit 사이
 _KEY_FILE = "gsheet_key.json"          # 경로·파일명 맞추기
+_RECOMMENDATION_SHEET_TITLE = "recommendations"
+_RECOMMENDATION_HEADER = ["일자", "티커", "종목명", "종가", "전략"]
 
 def _get_sheet():
     creds = Credentials.from_service_account_file(_KEY_FILE, scopes=_SCOPES)
     client = gspread.authorize(creds)
-    return client.open_by_key(_SHEET_ID).sheet1          # 첫 번째 탭
+    spreadsheet = client.open_by_key(_SHEET_ID)
+    try:
+        worksheet = spreadsheet.worksheet(_RECOMMENDATION_SHEET_TITLE)
+    except WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=_RECOMMENDATION_SHEET_TITLE,
+            rows=1000,
+            cols=len(_RECOMMENDATION_HEADER),
+        )
+
+    if worksheet.row_values(1) != _RECOMMENDATION_HEADER:
+        worksheet.update("A1:E1", [_RECOMMENDATION_HEADER])
+    return worksheet
 
 def log_selection(ticker: str,
                   close_price: float,
