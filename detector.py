@@ -169,12 +169,14 @@ def _collect_strategy_signals(
             if not signals:
                 continue
             close_price = float(raw_df["Close"].iloc[-1])
+            data_date = pd.to_datetime(raw_df["Date"].iloc[-1]).to_pydatetime()
             selections.append({"ticker": ticker, "name": name, "close": close_price})
             _safe_log_selection(
                 ticker=ticker,
+                name=name,
                 close_price=close_price,
                 method=f"{method_tag}:{strategy.entry_set}",
-                when=now_kst,
+                when=data_date,
             )
         except Exception as exc:
             print(f"[{ticker}] 데이터 처리 오류: {exc}")
@@ -336,6 +338,7 @@ def _fetch_recent_ohlcv(
 
 def _safe_log_selection(
     ticker: str,
+    name: str,
     close_price: float,
     method: str,
     when: datetime.datetime,
@@ -343,6 +346,7 @@ def _safe_log_selection(
     try:
         log_selection(
             ticker=ticker,
+            name=name,
             close_price=close_price,
             method=method,
             when=when,
@@ -668,9 +672,10 @@ def main() -> None:
                 breakout_list.append(f"- {name} ({ticker}) | 종가 {close_price:,.0f}")
                 _safe_log_selection(
                     ticker=ticker,
+                    name=name,
                     close_price=close_price,
                     method=f"Breakout{BREAKOUT_WIN}+MACD_GC(Recent{MACD_RECENT_LOOKBACK}d)",
-                    when=now_kst,
+                    when=data_date,
                 )
         except Exception as e:
             print(f"[{ticker}] breakout 오류: {e}")
@@ -691,9 +696,10 @@ def main() -> None:
                 trend_list.append(f"- {name} ({ticker}) | 종가 {close_price:,.0f}")
                 _safe_log_selection(
                     ticker=ticker,
+                    name=name,
                     close_price=close_price,
                     method=f"Trend(MA20>MA60,ATR={TREND_ATR_LO:.1%}~{TREND_ATR_HI:.1%},VOL≥{TREND_VOL_MULT}x)",
-                    when=now_kst,
+                    when=data_date,
                 )
         except Exception as e:
             print(f"[{ticker}] trend 오류: {e}")
@@ -714,9 +720,10 @@ def main() -> None:
                 power_list.append(f"- {name} ({ticker}) | 종가 {close_price:,.0f}")
                 _safe_log_selection(
                     ticker=ticker,
+                    name=name,
                     close_price=close_price,
                     method=f"Power(VOL≥{POWER_VOL_MULT}x,Bull≥{POWER_CANDLE_PCT:.1%},Breakout{POWER_WIN})",
-                    when=now_kst,
+                    when=data_date,
                 )
         except Exception as e:
             print(f"[{ticker}] power 오류: {e}")

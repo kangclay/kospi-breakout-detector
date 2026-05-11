@@ -15,11 +15,13 @@ def _get_sheet():
 def log_selection(ticker: str,
                   close_price: float,
                   method: str,
-                  when: datetime):
+                  when: datetime,
+                  name: str = ""):
     row = [
         when.strftime("%Y-%m-%d"),
         ticker,
-        method,
+        name or ticker,
         f"{close_price:.2f}",
+        method,
     ]
-    _get_sheet().append_row(row, value_input_option="USER_ENTERED",table_range="A:D")
+    _get_sheet().append_row(row, value_input_option="USER_ENTERED", table_range="A:E")

@@ -55,19 +55,21 @@ for ticker in tickers:
         if macd_cross and (ma_cross_1 or ma_cross_2) and vol_surge:
             close_price = df["종가"].iloc[-1]
 
-            # 🆕 Google Sheets 기록 (Date | Ticker | Method | ClosePrice)
+            name = stock.get_market_ticker_name(ticker)
+
+            # Google Sheets 기록 (Date | Ticker | Name | ClosePrice | Method)
             try:
                 log_selection(
                     ticker=ticker,                # 두 번째 열: 티커 그대로
+                    name=name,
                     close_price=close_price,
                     method="MACD+MA+VOL",       # 방법 구분 태그
-                    when=datetime.today()
+                    when=df.index[-1].to_pydatetime(),
                 )
             except Exception as e:
                 print(f"[{ticker}] 시트 기록 실패: {e}")
 
             # ↓ 이하 종전 로직(표·그래프·뉴스)용 리스트
-            name = stock.get_market_ticker_name(ticker)
             signals.append({
                 "종목명":           name,
                 "티커":             ticker,
