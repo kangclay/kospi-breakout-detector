@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from daily_screener import _add_cross_sectional_scores, _fundamental_scores, build_price_features
+from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, build_price_features
 
 
 def _make_ohlcv(rows=260):
@@ -50,7 +50,14 @@ class DailyScreenerTest(unittest.TestCase):
         scored = _add_cross_sectional_scores(frame)
         self.assertEqual(len(scored), 2)
         self.assertTrue(scored["score"].notna().all())
+        self.assertTrue(np.allclose(scored["factor_coverage"], 0.7))
         self.assertGreaterEqual(float(scored.iloc[0]["score"]), float(scored.iloc[1]["score"]))
+
+    def test_default_entry_threshold_is_calibrated_to_82(self):
+        config = ScreenConfig()
+        self.assertEqual(config.min_score, 82.0)
+        self.assertEqual(config.watch_score, 75.0)
+        self.assertEqual(config.min_factor_coverage, 0.70)
 
     def test_fundamental_scores_are_computed(self):
         frame = pd.DataFrame(

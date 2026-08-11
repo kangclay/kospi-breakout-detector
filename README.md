@@ -10,6 +10,7 @@ KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로
 - 최근 가격 이력에서 20/60/120/200일 모멘텀, 이동평균 정배열, 신고가 접근도, 변동성, 낙폭 계산
 - PER/PBR/배당수익률 기반 가치 점수
 - 선택적으로 `data/fundamentals_latest.csv`를 연결해 ROE/ROIC/마진/성장률/부채비율을 점수에 반영
+- 기본 매수 기준은 점수 82점 이상·팩터 충족률 70% 이상이며, 75점 이상은 관찰 후보(`WATCH`)로 남김
 - KOSPI/KOSDAQ 지수의 60일선·200일선으로 시장국면 필터
 - KRX 계정 환경변수가 없으면 Naver 공개 시총·지수 페이지를 유니버스/국면 조회의 fallback으로 사용하고, 개별 종목 과거 OHLCV는 pykrx로 조회
 - `reports/daily_screen.csv`와 `reports/daily_screen.json` 생성
@@ -24,6 +25,12 @@ python daily_screener.py --top-n 10
 
 ```bash
 python daily_screener.py --as-of-date 20260710 --top-n 10
+```
+
+매수·관찰 기준은 실행 시 조정할 수 있습니다.
+
+```bash
+python daily_screener.py --min-score 82 --watch-score 75 --min-factor-coverage 0.70
 ```
 
 재무 스냅샷은 `data/fundamentals_latest.csv.example`의 컬럼을 따릅니다. `available_date`가 기준일 이후인 행은 자동으로 제외합니다. 파일이 없으면 가격·가치 중심으로 실행되고 결과에 `재무 스냅샷: 미사용`으로 표시됩니다.

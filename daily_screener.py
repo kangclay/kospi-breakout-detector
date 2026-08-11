@@ -35,6 +35,13 @@ DEFAULT_DATA_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_REPORT_DIR = Path(__file__).resolve().parent / "reports"
 NAVER_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; DailyMultiFactorScreener/1.0)"}
 NAVER_PAGE_SIZE = 50
+FACTOR_WEIGHTS = {
+    "momentum_score": 0.40,
+    "quality_score": 0.20,
+    "value_score": 0.20,
+    "catalyst_score": 0.10,
+    "risk_score": 0.10,
+}
 
 
 @dataclass
@@ -46,7 +53,11 @@ class ScreenConfig:
     min_market_cap: float = 100_000_000_000.0
     min_trading_value: float = 500_000_000.0
     min_history: int = 180
-    min_score: float = 70.0
+    # 2026-08-11 trailing-stop review: score >=82 was the first profitable
+    # bucket; preserve the raw score but tighten the live entry threshold.
+    min_score: float = 82.0
+    watch_score: float = 75.0
+    min_factor_coverage: float = 0.70
     request_sleep: float = 0.08
     allow_unknown_regime: bool = True
     fundamentals_path: str = "data/fundamentals_latest.csv"
@@ -252,22 +263,24 @@ def _add_cross_sectional_scores(frame: pd.DataFrame) -> pd.DataFrame:
         ]
     )
 
-    weights = {
-        "momentum_score": 0.40,
-        "quality_score": 0.20,
-        "value_score": 0.20,
-        "catalyst_score": 0.10,
-        "risk_score": 0.10,
-    }
+    def usable_factors(row: pd.Series) -> list[tuple[float, float]]:
+        usable = [(weight, _as_float(row.get(column))) for column, weight in FACTOR_WEIGHTS.items()]
+        usable = [(weight, value) for weight, value in usable if np.isfinite(value)]
+        return usable
 
     def total_score(row: pd.Series) -> float:
-        usable = [(weight, _as_float(row.get(column))) for column, weight in weights.items()]
-        usable = [(weight, value) for weight, value in usable if np.isfinite(value)]
+        usable = usable_factors(row)
         if not usable:
             return float("nan")
         return float(sum(weight * value for weight, value in usable) / sum(weight for weight, _ in usable))
 
     result["score"] = result.apply(total_score, axis=1)
+    # The raw composite is normalized over available factors.  Surface the
+    # available weight so an otherwise high score cannot be treated as equally
+    # complete when quality/catalyst inputs are absent.
+    result["factor_coverage"] = result.apply(
+        lambda row: sum(weight for weight, _ in usable_factors(row)), axis=1
+    )
     return result.sort_values(["score", "momentum_score"], ascending=[False, False]).reset_index(drop=True)
 
 
@@ -512,9 +525,13 @@ def _prepare_market_rows(
     result["rank"] = np.arange(1, len(result) + 1)
     result["stop_price_atr2"] = result["close"] - 2.0 * result["atr14"]
     result["action"] = np.where(
-        result["regime_ok"] & result["trend_ok"] & result["not_chasing"] & (result["score"] >= config.min_score),
+        result["regime_ok"]
+        & result["trend_ok"]
+        & result["not_chasing"]
+        & (result["score"] >= config.min_score)
+        & (result["factor_coverage"] >= config.min_factor_coverage),
         "BUY_CANDIDATE",
-        np.where((result["score"] >= 60.0) & result["trend_ok"], "WATCH", "PASS"),
+        np.where((result["score"] >= config.watch_score) & result["trend_ok"], "WATCH", "PASS"),
     )
     result["regime_close"] = _as_float(regime.get("close"))
     result["regime_ma60"] = _as_float(regime.get("ma60"))
@@ -535,7 +552,14 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
     resolved_asof = _resolve_asof_date(asof_date, config.markets)
     fundamentals = _load_fundamentals(config.fundamentals_path, resolved_asof)
     frames = []
-    stats = {"asof_date": resolved_asof, "fundamentals_available": bool(not fundamentals.empty), "markets": []}
+    stats = {
+        "asof_date": resolved_asof,
+        "fundamentals_available": bool(not fundamentals.empty),
+        "min_score": config.min_score,
+        "watch_score": config.watch_score,
+        "min_factor_coverage": config.min_factor_coverage,
+        "markets": [],
+    }
 
     for market in config.markets:
         try:
@@ -574,6 +598,7 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
     lines = [
         f"📊 Daily Multi-Factor Screen | 기준일 {stats.get('asof_date', 'N/A')}",
         f"재무 스냅샷: {fundamental_status}",
+        f"매수 기준: 점수 ≥{_format_number(stats.get('min_score'), 1)}, 팩터 충족률 ≥{_format_number(_as_float(stats.get('min_factor_coverage')) * 100, 0)}%",
     ]
     for market_stat in stats.get("markets", []):
         regime = market_stat.get("regime", {})
@@ -594,6 +619,7 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
                 f"- {row.ticker} {_safe_name(row.ticker)} [{row.market}] "
                 f"score={_format_number(row.score, 1)} close={_format_number(row.close, 0)} "
                 f"mom={_format_number(row.momentum_score, 0)} value={_format_number(row.value_score, 0)} "
+                f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
                 f"stop(ATR2)={_format_number(row.stop_price_atr2, 0)}"
             )
     if not watch.empty:
@@ -664,7 +690,7 @@ def _log_sheet(result: pd.DataFrame) -> None:
                 ticker=row.ticker,
                 name=_safe_name(row.ticker),
                 close_price=float(row.close),
-                method=f"daily_multifactor:{row.market}:score={float(row.score):.1f}",
+                method=f"daily_multifactor:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
                 when=datetime.strptime(str(row.data_date), "%Y-%m-%d"),
             )
         except Exception as exc:
@@ -678,6 +704,9 @@ def main() -> None:
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--min-market-cap", type=float, default=100_000_000_000.0)
     parser.add_argument("--min-trading-value", type=float, default=500_000_000.0)
+    parser.add_argument("--min-score", type=float, default=ScreenConfig.min_score)
+    parser.add_argument("--watch-score", type=float, default=ScreenConfig.watch_score)
+    parser.add_argument("--min-factor-coverage", type=float, default=ScreenConfig.min_factor_coverage)
     parser.add_argument("--request-sleep", type=float, default=0.08)
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
@@ -690,6 +719,9 @@ def main() -> None:
         top_n=args.top_n,
         min_market_cap=args.min_market_cap,
         min_trading_value=args.min_trading_value,
+        min_score=args.min_score,
+        watch_score=args.watch_score,
+        min_factor_coverage=args.min_factor_coverage,
         request_sleep=args.request_sleep,
         fundamentals_path=args.fundamentals_path,
         output_dir=args.output_dir,
