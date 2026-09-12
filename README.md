@@ -35,6 +35,55 @@ python daily_screener.py --min-score 82 --watch-score 75 --min-factor-coverage 0
 
 재무 스냅샷은 `data/fundamentals_latest.csv.example`의 컬럼을 따릅니다. `available_date`가 기준일 이후인 행은 자동으로 제외합니다. 파일이 없으면 가격·가치 중심으로 실행되고 결과에 `재무 스냅샷: 미사용`으로 표시됩니다.
 
+## 독립 매수·매도 타이밍 엔진
+
+`trade_timing.py`는 기존 추천 선별과 분리되어, 한 종목의 일별 OHLCV에서 매수·대기·보유·청산 시점을 계산합니다. 자동 주문이나 기존 추천 목록 기록은 하지 않습니다.
+
+- 매수: 20일 신고가 돌파와 거래량 확인(`BUY_NOW`), 또는 20일선 부근 상승 반전(`BUY_PULLBACK`)
+- 리스크 관리: 최초 2.5 ATR 손절, 1R 수익 이후 최고가 기준 3 ATR 트레일링스탑
+- 청산: 장중 스탑 도달은 스탑가, 갭하락은 시가로 계산
+
+신규 진입 타이밍 확인:
+
+```bash
+python trade_timing.py --ticker 005930 --as-of-date 20260912
+```
+
+보유 포지션의 청산·보유 상태 확인:
+
+```bash
+python trade_timing.py --ticker 005930 --as-of-date 20260912 --entry-date 2026-09-01 --entry-price 70000
+```
+
+여러 추천 종목의 매수 시점은 `ticker` 또는 `티커` 열이 있는 CSV로 계산합니다.
+
+```bash
+python trade_timing.py --recommendations-csv recommendations.csv --as-of-date 20260912 --output reports/entry_timing.json
+```
+
+### GitHub Actions · Google Sheets · Telegram 연동
+
+`Independent Trade Timing Engine` 워크플로는 `Daily Multi-Factor Screener`가 성공적으로 끝난 뒤 별도로 실행됩니다. 기존 멀티팩터 추천의 Telegram 메시지와 `recommendations` 탭은 수정하지 않습니다.
+
+- `recommendations`: 기존 멀티팩터 추천의 읽기 전용 원본
+- `타이밍엔진_보유입력`: 실제 보유 종목을 직접 입력하는 탭 (`진입일 | 티커 | 종목명(선택) | 진입가(원) | 메모(선택)`)
+- `타이밍엔진_매수신호`: 최근 20일의 `daily_multifactor:` 추천만 대상으로 한 독립 매수 신호 자동 갱신 탭
+- `타이밍엔진_보유신호`: 보유입력 탭을 대상으로 한 ATR 스탑/청산 신호 자동 갱신 탭
+
+워크플로는 기존 `GSHEET_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` Secrets를 그대로 사용합니다. Telegram에는 `⏱️ 독립 매수·매도 타이밍`이라는 제목으로만 알림이 오며, 자동 주문은 절대 실행하지 않습니다.
+
+로컬 실행:
+
+```bash
+python timing_runner.py --write-sheet --notify
+```
+
+실제 보유분의 매도 시점은 `ticker`·`entry_date`·`entry_price` 열(또는 `일자`·`티커`·`종가`)을 가진 CSV로 별도 관리합니다. 추천이 곧 매수가 되는 것은 아니므로, 보유분은 추천 목록과 분리하는 방식입니다.
+
+```bash
+python trade_timing.py --positions-csv positions.csv --as-of-date 20260912 --output reports/position_timing.json
+```
+
 KRX 직접 조회를 사용하려면 GitHub Actions Secrets에 `KRX_ID`, `KRX_PW`를 추가할 수 있습니다. 기본값은 별도 KRX 계정 없이도 동작하도록 Naver fallback을 사용합니다. Naver fallback은 현재 시총 표를 사용하므로 과거 기준일을 엄격히 재현하는 백테스트 데이터 소스로 사용하지 않습니다.
 
 ## 흐름
