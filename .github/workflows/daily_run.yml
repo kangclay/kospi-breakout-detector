@@ -2,7 +2,8 @@ name: Daily Multi-Factor Screener
 
 on:
   schedule:
-    - cron: '0 9 * * 1-5'
+    # 18:17 KST (09:17 UTC): avoid GitHub Actions' high-load top-of-hour queue.
+    - cron: '17 9 * * 1-5'
   workflow_dispatch:
 
 jobs:
