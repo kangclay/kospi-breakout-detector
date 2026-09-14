@@ -1,10 +1,11 @@
 import unittest
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 
 from trade_timing import Position, _batch_input, entry_timing, position_timing
-from timing_runner import build_message, parse_position_rows, parse_recommendation_rows
+from timing_runner import _send_telegram, build_message, parse_position_rows, parse_recommendation_rows
 
 
 def _prices(rows: int = 70) -> pd.DataFrame:
@@ -85,7 +86,6 @@ class TradeTimingTest(unittest.TestCase):
         self.assertIn("모의 청산 조건", message)
 
     def test_batch_position_result_keeps_its_input_identity(self):
-        from unittest.mock import patch
         from trade_timing import batch_timing
 
         with patch("trade_timing._fetch_ohlcv", return_value=_prices(75)):
@@ -96,6 +96,16 @@ class TradeTimingTest(unittest.TestCase):
             )
         self.assertEqual(result[0]["entry_date"], "2026-03-27")
         self.assertEqual(result[0]["entry_price"], 160.0)
+
+    def test_telegram_http_error_does_not_fail_timing_runner(self):
+        import os
+        import requests
+
+        response = Mock(status_code=401)
+        response.json.return_value = {"description": "Unauthorized"}
+        error = requests.HTTPError(response=response)
+        with patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token", "TELEGRAM_CHAT_ID": "123"}, clear=False), patch("requests.post", side_effect=error):
+            self.assertFalse(_send_telegram("test"))
 
     def _write_csv(self, content):
         import tempfile

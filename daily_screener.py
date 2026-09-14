@@ -661,20 +661,38 @@ def _write_reports(result: pd.DataFrame, stats: dict, output_dir: str) -> tuple[
     return csv_path, json_path
 
 
-def _send_telegram(message: str) -> None:
+def _send_telegram(message: str) -> bool:
+    """Send a notification without allowing a notification outage to fail screening."""
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         print("[WARN] TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID가 없어 알림을 건너뜁니다.")
-        return
+        return False
     import requests
 
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": chat_id, "text": message[:3900]},
-        timeout=15,
-    )
-    response.raise_for_status()
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": message[:3900]},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        description = ""
+        if response is not None:
+            try:
+                description = str(response.json().get("description", ""))[:300]
+            except (ValueError, AttributeError):
+                pass
+        detail = f" HTTP {status}" if status is not None else f" {type(exc).__name__}"
+        if description:
+            detail += f": {description}"
+        print(f"[WARN] Telegram 알림 전송 실패({detail.strip()}). 스크리너 결과는 정상 처리합니다.")
+        return False
+    print("Telegram 알림 전송 완료")
+    return True
 
 
 def _log_sheet(result: pd.DataFrame) -> None:

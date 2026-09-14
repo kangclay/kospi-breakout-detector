@@ -72,6 +72,8 @@ python trade_timing.py --recommendations-csv recommendations.csv --as-of-date 20
 
 워크플로는 기존 `GSHEET_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` Secrets를 그대로 사용합니다. Telegram에는 `⏱️ 독립 매수·매도 타이밍`이라는 제목으로만 알림이 오며, 자동 주문은 절대 실행하지 않습니다.
 
+Telegram API가 실패해도 스크리닝·시트 기록은 성공 처리됩니다. GitHub Actions 로그에는 토큰을 노출하지 않고 HTTP 상태와 Telegram 오류 설명만 남습니다.
+
 로컬 실행:
 
 ```bash

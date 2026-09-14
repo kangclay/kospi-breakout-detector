@@ -1,9 +1,10 @@
 import unittest
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 
-from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, build_price_features
+from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _send_telegram, build_price_features
 
 
 def _make_ohlcv(rows=260):
@@ -73,6 +74,16 @@ class DailyScreenerTest(unittest.TestCase):
         scored = _fundamental_scores(frame)
         self.assertTrue((scored["quality_score"] > 0).all())
         self.assertTrue((scored["catalyst_score"] > 0).all())
+
+    def test_telegram_http_error_does_not_fail_screening(self):
+        import os
+        import requests
+
+        response = Mock(status_code=400)
+        response.json.return_value = {"description": "Bad Request: chat not found"}
+        error = requests.HTTPError(response=response)
+        with patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token", "TELEGRAM_CHAT_ID": "123"}, clear=False), patch("requests.post", side_effect=error):
+            self.assertFalse(_send_telegram("test"))
 
 
 if __name__ == "__main__":
