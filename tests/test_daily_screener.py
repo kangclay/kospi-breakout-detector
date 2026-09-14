@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 
-from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _send_telegram, build_price_features
+from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _log_sheet, _send_telegram, build_price_features
 
 
 def _make_ohlcv(rows=260):
@@ -84,6 +84,10 @@ class DailyScreenerTest(unittest.TestCase):
         error = requests.HTTPError(response=response)
         with patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token", "TELEGRAM_CHAT_ID": "123"}, clear=False), patch("requests.post", side_effect=error):
             self.assertFalse(_send_telegram("test"))
+
+    def test_sheet_log_skips_empty_result_without_action_column(self):
+        # This is the exact shape returned when neither market yields rows.
+        _log_sheet(pd.DataFrame())
 
 
 if __name__ == "__main__":

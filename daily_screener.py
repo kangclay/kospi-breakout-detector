@@ -696,6 +696,11 @@ def _send_telegram(message: str) -> bool:
 
 
 def _log_sheet(result: pd.DataFrame) -> None:
+    # A no-candidate day returns an empty DataFrame without result columns.
+    # This is a valid screen outcome, not a Google Sheets logging failure.
+    if result.empty or "action" not in result.columns:
+        print("[INFO] 기록할 BUY_CANDIDATE가 없어 Google Sheets 추가를 건너뜁니다.")
+        return
     try:
         from sheet_logger import log_selection
     except Exception as exc:
