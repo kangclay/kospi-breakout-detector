@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable
@@ -67,16 +68,20 @@ class KRXOpenAPIClient:
     auth_key: str
     request_sleep: float = 0.02
     session: requests.Session | None = None
+    max_workers: int = 8
 
     def __post_init__(self) -> None:
         if not self.auth_key:
             raise ValueError("KRX Open API 인증키가 필요합니다.")
-        if self.session is None:
-            self.session = requests.Session()
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
 
     def _get(self, endpoint: str, date: str) -> list[dict]:
-        assert self.session is not None
-        response = self.session.get(
+        # A supplied Session is useful for unit tests.  Live history loading is
+        # concurrent, so use requests.get rather than sharing one Session
+        # between worker threads.
+        get = self.session.get if self.session is not None else requests.get
+        response = get(
             f"{BASE_URL}/{endpoint}",
             headers={"AUTH_KEY": self.auth_key},
             params={"basDd": date},
@@ -85,7 +90,7 @@ class KRXOpenAPIClient:
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
-            raise KRXOpenAPIError(f"KRX API 요청 실패({response.status_code})") from exc
+            raise KRXOpenAPIError(f"KRX API 요청 실패({response.status_code}): {endpoint} {date}") from exc
         try:
             return _records(response.json())
         except ValueError as exc:
@@ -120,35 +125,42 @@ class KRXOpenAPIClient:
     def market_history(self, market: str, start: str, end: str, tickers: Iterable[str] | None = None) -> pd.DataFrame:
         wanted = {str(ticker).zfill(6) for ticker in tickers} if tickers is not None else None
         rows = []
-        current = pd.Timestamp(start)
-        final = pd.Timestamp(end)
-        while current <= final:
-            daily = self.market_daily(market, current.strftime("%Y%m%d"))
-            if wanted is not None and not daily.empty:
-                daily = daily[daily["ticker"].isin(wanted)]
-            if not daily.empty:
-                rows.append(daily)
-            current += timedelta(days=1)
+        dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D").strftime("%Y%m%d").tolist()
+        # One request contains the entire market for the selected date.  Fetch
+        # dates concurrently, while keeping the worker count deliberately low
+        # enough to stay far below KRX's daily request limit.
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(dates) or 1)) as executor:
+            daily_frames = executor.map(lambda date: self.market_daily(market, date), dates)
+            for daily in daily_frames:
+                if wanted is not None and not daily.empty:
+                    daily = daily[daily["ticker"].isin(wanted)]
+                if not daily.empty:
+                    rows.append(daily)
         if not rows:
             return pd.DataFrame(columns=["ticker", "name", "Date", "Open", "High", "Low", "Close", "Volume", "TradingValue", "market_cap", "market"])
         return pd.concat(rows, ignore_index=True).sort_values(["ticker", "Date"]).reset_index(drop=True)
 
     def index_history(self, market: str, start: str, end: str) -> pd.DataFrame:
         rows = []
-        current = pd.Timestamp(start)
-        final = pd.Timestamp(end)
         wanted_names = INDEX_NAMES[market]
-        while current <= final:
-            response_rows = self._get(INDEX_ENDPOINTS[market], current.strftime("%Y%m%d"))
+        dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D").strftime("%Y%m%d").tolist()
+
+        def load_one(date: str) -> list[dict]:
+            response_rows = self._get(INDEX_ENDPOINTS[market], date)
             if self.request_sleep:
                 time.sleep(self.request_sleep)
-            for row in response_rows:
-                if str(row.get("IDX_NM", "")).strip() not in wanted_names:
-                    continue
-                close = _number(row.get("CLSPRC_IDX"))
-                date = pd.to_datetime(row.get("BAS_DD"), format="%Y%m%d", errors="coerce")
-                if pd.notna(date) and np.isfinite(close):
-                    rows.append({"Date": date, "Close": close})
+            return response_rows
+
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(dates) or 1)) as executor:
+            response_sets = executor.map(load_one, dates)
+            for response_rows in response_sets:
+                for row in response_rows:
+                    if str(row.get("IDX_NM", "")).strip() not in wanted_names:
+                        continue
+                    close = _number(row.get("CLSPRC_IDX"))
+                    date = pd.to_datetime(row.get("BAS_DD"), format="%Y%m%d", errors="coerce")
+                    if pd.notna(date) and np.isfinite(close):
+                        rows.append({"Date": date, "Close": close})
         return pd.DataFrame(rows).drop_duplicates("Date").sort_values("Date").reset_index(drop=True) if rows else pd.DataFrame(columns=["Date", "Close"])
 
     def latest_market_day(self, market: str, before: str, max_days: int = 10) -> str | None:

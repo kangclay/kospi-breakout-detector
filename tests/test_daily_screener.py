@@ -52,6 +52,27 @@ class DailyScreenerTest(unittest.TestCase):
         self.assertEqual(float(frame.iloc[0].Close), 70_500.0)
         self.assertEqual(float(frame.iloc[0].market_cap), 420_000_000_000_000.0)
 
+    def test_krx_open_api_history_filters_each_daily_snapshot(self):
+        client = KRXOpenAPIClient("test-key", request_sleep=0, max_workers=2)
+        calls = []
+
+        def fake_daily(market, date):
+            calls.append((market, date))
+            return pd.DataFrame(
+                {
+                    "ticker": ["005930", "000660"],
+                    "Date": [pd.Timestamp(date), pd.Timestamp(date)],
+                    "Close": [70_000, 100_000],
+                }
+            )
+
+        client.market_daily = fake_daily
+        history = client.market_history("KOSPI", "20261001", "20261003", tickers=["005930"])
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(history["ticker"].unique().tolist(), ["005930"])
+        self.assertEqual(len(history), 3)
+
     def test_build_price_features_has_trend_and_atr(self):
         features = build_price_features(_make_ohlcv())
         self.assertTrue(features["trend_ok"])

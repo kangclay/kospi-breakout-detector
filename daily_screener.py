@@ -49,7 +49,9 @@ FACTOR_WEIGHTS = {
 @dataclass
 class ScreenConfig:
     markets: tuple[str, ...] = ("KOSPI", "KOSDAQ")
-    lookback_days: int = 450
+    # 365 calendar days safely supplies the 200 trading sessions needed by the
+    # longest factor, while avoiding unnecessary KRX daily API calls.
+    lookback_days: int = 365
     prefilter_limit: int = 300
     top_n: int = 10
     min_market_cap: float = 100_000_000_000.0
@@ -552,7 +554,7 @@ def _prepare_market_rows(
             rows.append(row)
         except Exception as exc:
             print(f"[WARN] {market} {ticker} history failed: {exc}")
-        if config.request_sleep > 0:
+        if krx_open is None and config.request_sleep > 0:
             time.sleep(config.request_sleep)
 
     if not rows:
