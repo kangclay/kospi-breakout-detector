@@ -28,6 +28,8 @@ import requests
 from bs4 import BeautifulSoup
 from pykrx import stock
 
+from krx_open_api import KRXOpenAPIClient, KRXOpenAPIError
+
 
 KST = ZoneInfo("Asia/Seoul")
 MARKET_INDEX_CODES = {"KOSPI": "1001", "KOSDAQ": "2001"}
@@ -378,7 +380,31 @@ def _load_naver_index_history(market: str, pages: int = 22) -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates("Date").sort_values("Date") if rows else pd.DataFrame()
 
 
-def _load_market_snapshot(asof_date: str, market: str, prefilter_limit: int) -> pd.DataFrame:
+def _krx_open_client(request_sleep: float = 0.02) -> Optional[KRXOpenAPIClient]:
+    key = os.getenv("KRX_OPEN_API_KEY", "").strip()
+    return KRXOpenAPIClient(key, request_sleep=request_sleep) if key else None
+
+
+def _load_krx_open_market_snapshot(client: KRXOpenAPIClient, asof_date: str, market: str) -> pd.DataFrame:
+    daily = client.market_daily(market, asof_date)
+    if daily.empty:
+        return pd.DataFrame()
+    snapshot = daily.rename(columns={"TradingValue": "trading_value_today", "Close": "close_snapshot"}).copy()
+    snapshot["per"] = float("nan")
+    snapshot["pbr"] = float("nan")
+    snapshot["dividend_yield"] = float("nan")
+    snapshot["source"] = "krx_open_api"
+    return snapshot
+
+
+def _load_market_snapshot(
+    asof_date: str,
+    market: str,
+    prefilter_limit: int,
+    krx_open: Optional[KRXOpenAPIClient] = None,
+) -> pd.DataFrame:
+    if krx_open is not None:
+        return _load_krx_open_market_snapshot(krx_open, asof_date, market)
     if os.getenv("KRX_ID") and os.getenv("KRX_PW"):
         try:
             price = _normalize_snapshot(stock.get_market_ohlcv_by_ticker(asof_date, market=market), "price_")
@@ -402,7 +428,18 @@ def _load_market_snapshot(asof_date: str, market: str, prefilter_limit: int) -> 
     return _load_naver_market_snapshot(market, prefilter_limit)
 
 
-def _resolve_asof_date(requested: Optional[str], markets: tuple[str, ...]) -> str:
+def _resolve_asof_date(
+    requested: Optional[str],
+    markets: tuple[str, ...],
+    krx_open: Optional[KRXOpenAPIClient] = None,
+) -> str:
+    if krx_open is not None:
+        before = requested or pd.Timestamp.now(tz=KST).tz_localize(None).strftime("%Y%m%d")
+        for market in markets:
+            latest = krx_open.latest_market_day(market, before)
+            if latest:
+                return latest
+        raise KRXOpenAPIError("최근 거래일의 KRX Open API 데이터를 찾지 못했습니다.")
     if requested:
         return requested
     for market in markets:
@@ -416,13 +453,20 @@ def _resolve_asof_date(requested: Optional[str], markets: tuple[str, ...]) -> st
     return fallback.strftime("%Y%m%d")
 
 
-def _load_regime(asof_date: str, market: str, lookback_days: int) -> dict:
+def _load_regime(
+    asof_date: str,
+    market: str,
+    lookback_days: int,
+    krx_open: Optional[KRXOpenAPIClient] = None,
+) -> dict:
     index_code = MARKET_INDEX_CODES.get(market)
     if not index_code:
         return {"state": "UNKNOWN", "reason": "unsupported market"}
     start = (pd.Timestamp(asof_date) - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
     try:
-        if not (os.getenv("KRX_ID") and os.getenv("KRX_PW")):
+        if krx_open is not None:
+            normalized = krx_open.index_history(market, start, asof_date)
+        elif not (os.getenv("KRX_ID") and os.getenv("KRX_PW")):
             normalized = _load_naver_index_history(market, pages=40)
         else:
             raw = stock.get_index_ohlcv_by_date(start, asof_date, index_code)
@@ -461,6 +505,7 @@ def _prepare_market_rows(
     asof_date: str,
     config: ScreenConfig,
     fundamentals: pd.DataFrame,
+    krx_open: Optional[KRXOpenAPIClient] = None,
 ) -> tuple[pd.DataFrame, dict]:
     if snapshot.empty:
         return pd.DataFrame(), {"market": market, "snapshot_count": 0, "prefilter_count": 0, "history_count": 0}
@@ -475,15 +520,26 @@ def _prepare_market_rows(
 
     rows = []
     start_date = (pd.Timestamp(asof_date) - pd.Timedelta(days=config.lookback_days)).strftime("%Y%m%d")
+    history_by_ticker: dict[str, pd.DataFrame] = {}
+    if krx_open is not None:
+        try:
+            market_history = krx_open.market_history(market, start_date, asof_date, snapshot["ticker"].tolist())
+            history_by_ticker = {
+                ticker: frame.drop(columns=["ticker", "name", "market", "market_cap"], errors="ignore")
+                for ticker, frame in market_history.groupby("ticker")
+            }
+        except Exception as exc:
+            raise KRXOpenAPIError(f"{market} 가격 이력 조회 실패: {exc}") from exc
     for item in snapshot.itertuples(index=False):
         ticker = str(item.ticker)
         try:
-            raw = stock.get_market_ohlcv_by_date(start_date, asof_date, ticker)
+            raw = history_by_ticker.get(ticker, pd.DataFrame()) if krx_open is not None else stock.get_market_ohlcv_by_date(start_date, asof_date, ticker)
             features = build_price_features(raw, min_history=config.min_history)
             if not features:
                 continue
             row = {
                 "ticker": ticker,
+                "name": str(getattr(item, "name", "") or ticker),
                 "market": market,
                 "market_cap": _as_float(item.market_cap),
                 "trading_value_today": _as_float(item.trading_value_today),
@@ -518,7 +574,7 @@ def _prepare_market_rows(
         result["quality_score"] = _percentile(result["roe"]) if "roe" in result.columns else float("nan")
         result["catalyst_score"] = float("nan")
 
-    regime = _load_regime(asof_date, market, config.lookback_days)
+    regime = _load_regime(asof_date, market, config.lookback_days, krx_open)
     result["regime_state"] = regime.get("state", "UNKNOWN")
     result["regime_ok"] = result["regime_state"].ne("OFF") if config.allow_unknown_regime else result["regime_state"].eq("ON")
     result = _add_cross_sectional_scores(result)
@@ -549,7 +605,8 @@ def _prepare_market_rows(
 
 
 def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[pd.DataFrame, dict]:
-    resolved_asof = _resolve_asof_date(asof_date, config.markets)
+    krx_open = _krx_open_client(config.request_sleep)
+    resolved_asof = _resolve_asof_date(asof_date, config.markets, krx_open)
     fundamentals = _load_fundamentals(config.fundamentals_path, resolved_asof)
     frames = []
     stats = {
@@ -558,17 +615,18 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
         "min_score": config.min_score,
         "watch_score": config.watch_score,
         "min_factor_coverage": config.min_factor_coverage,
+        "data_provider": "krx_open_api" if krx_open is not None else "legacy",
         "markets": [],
     }
 
     for market in config.markets:
         try:
-            snapshot = _load_market_snapshot(resolved_asof, market, config.prefilter_limit)
+            snapshot = _load_market_snapshot(resolved_asof, market, config.prefilter_limit, krx_open)
         except Exception as exc:
             print(f"[ERROR] {market} snapshot failed: {exc}")
             stats["markets"].append({"market": market, "snapshot_count": 0, "prefilter_count": 0, "history_count": 0, "error": str(exc)[:180]})
             continue
-        frame, market_stats = _prepare_market_rows(snapshot, market, resolved_asof, config, fundamentals)
+        frame, market_stats = _prepare_market_rows(snapshot, market, resolved_asof, config, fundamentals, krx_open)
         if not frame.empty:
             frames.append(frame)
         stats["markets"].append(market_stats)
@@ -597,6 +655,7 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
         fundamental_status = "미사용(가격·가치 중심)"
     lines = [
         f"📊 Daily Multi-Factor Screen | 기준일 {stats.get('asof_date', 'N/A')}",
+        f"시세 데이터: {'KRX Open API' if stats.get('data_provider') == 'krx_open_api' else 'legacy fallback'}",
         f"재무 스냅샷: {fundamental_status}",
         f"매수 기준: 점수 ≥{_format_number(stats.get('min_score'), 1)}, 팩터 충족률 ≥{_format_number(_as_float(stats.get('min_factor_coverage')) * 100, 0)}%",
     ]
@@ -615,8 +674,9 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
     else:
         lines.append("\n[BUY_CANDIDATE]")
         for row in candidates.itertuples(index=False):
+            name = getattr(row, "name", "") or _safe_name(row.ticker)
             lines.append(
-                f"- {row.ticker} {_safe_name(row.ticker)} [{row.market}] "
+                f"- {row.ticker} {name} [{row.market}] "
                 f"score={_format_number(row.score, 1)} close={_format_number(row.close, 0)} "
                 f"mom={_format_number(row.momentum_score, 0)} value={_format_number(row.value_score, 0)} "
                 f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
@@ -625,7 +685,8 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
     if not watch.empty:
         lines.append("\n[WATCH]")
         for row in watch.itertuples(index=False):
-            lines.append(f"- {row.ticker} {_safe_name(row.ticker)} score={_format_number(row.score, 1)}")
+            name = getattr(row, "name", "") or _safe_name(row.ticker)
+            lines.append(f"- {row.ticker} {name} score={_format_number(row.score, 1)}")
     return "\n".join(lines)
 
 
@@ -711,7 +772,7 @@ def _log_sheet(result: pd.DataFrame) -> None:
         try:
             log_selection(
                 ticker=row.ticker,
-                name=_safe_name(row.ticker),
+                name=getattr(row, "name", "") or _safe_name(row.ticker),
                 close_price=float(row.close),
                 method=f"daily_multifactor:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
                 when=datetime.strptime(str(row.data_date), "%Y-%m-%d"),
@@ -733,9 +794,13 @@ def main() -> None:
     parser.add_argument("--request-sleep", type=float, default=0.08)
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
+    parser.add_argument("--require-krx-open-api", action="store_true", help="KRX_OPEN_API_KEY가 없으면 실행을 실패 처리")
     parser.add_argument("--notify", action="store_true")
     parser.add_argument("--log-sheet", action="store_true")
     args = parser.parse_args()
+
+    if args.require_krx_open_api and not os.getenv("KRX_OPEN_API_KEY", "").strip():
+        raise SystemExit("KRX_OPEN_API_KEY GitHub Secret이 필요합니다. KRX Open API 이용 승인 후 설정하세요.")
 
     config = ScreenConfig(
         prefilter_limit=args.prefilter_limit,

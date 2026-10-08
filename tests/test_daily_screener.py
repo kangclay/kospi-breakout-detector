@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _log_sheet, _send_telegram, build_price_features
+from krx_open_api import KRXOpenAPIClient
 
 
 def _make_ohlcv(rows=260):
@@ -23,6 +24,34 @@ def _make_ohlcv(rows=260):
 
 
 class DailyScreenerTest(unittest.TestCase):
+    def test_krx_open_api_normalizes_daily_market_snapshot(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "OutBlock_1": [
+                {
+                    "BAS_DD": "20261008",
+                    "ISU_CD": "KR7005930003",
+                    "ISU_NM": "삼성전자",
+                    "TDD_OPNPRC": "70,000",
+                    "TDD_HGPRC": "71,000",
+                    "TDD_LWPRC": "69,500",
+                    "TDD_CLSPRC": "70,500",
+                    "ACC_TRDVOL": "1,000,000",
+                    "ACC_TRDVAL": "70,500,000,000",
+                    "MKTCAP": "420,000,000,000,000",
+                }
+            ]
+        }
+        session = Mock()
+        session.get.return_value = response
+        frame = KRXOpenAPIClient("test-key", request_sleep=0, session=session).market_daily("KOSPI", "20261008")
+
+        self.assertEqual(frame.iloc[0].ticker, "005930")
+        self.assertEqual(frame.iloc[0]["name"], "삼성전자")
+        self.assertEqual(float(frame.iloc[0].Close), 70_500.0)
+        self.assertEqual(float(frame.iloc[0].market_cap), 420_000_000_000_000.0)
+
     def test_build_price_features_has_trend_and_atr(self):
         features = build_price_features(_make_ohlcv())
         self.assertTrue(features["trend_ok"])

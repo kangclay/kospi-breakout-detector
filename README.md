@@ -12,7 +12,7 @@ KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로
 - 선택적으로 `data/fundamentals_latest.csv`를 연결해 ROE/ROIC/마진/성장률/부채비율을 점수에 반영
 - 기본 매수 기준은 점수 82점 이상·팩터 충족률 70% 이상이며, 75점 이상은 관찰 후보(`WATCH`)로 남김
 - KOSPI/KOSDAQ 지수의 60일선·200일선으로 시장국면 필터
-- KRX 계정 환경변수가 없으면 Naver 공개 시총·지수 페이지를 유니버스/국면 조회의 fallback으로 사용하고, 개별 종목 과거 OHLCV는 pykrx로 조회
+- KRX Data Marketplace Open API의 일별 전종목 OHLCV·시가총액·거래대금으로 유니버스와 가격 이력을 구성
 - `reports/daily_screen.csv`와 `reports/daily_screen.json` 생성
 
 로컬 실행:
@@ -86,7 +86,14 @@ python timing_runner.py --write-sheet --notify
 python trade_timing.py --positions-csv positions.csv --as-of-date 20260912 --output reports/position_timing.json
 ```
 
-KRX 직접 조회를 사용하려면 GitHub Actions Secrets에 `KRX_ID`, `KRX_PW`를 추가할 수 있습니다. 기본값은 별도 KRX 계정 없이도 동작하도록 Naver fallback을 사용합니다. Naver fallback은 현재 시총 표를 사용하므로 과거 기준일을 엄격히 재현하는 백테스트 데이터 소스로 사용하지 않습니다.
+GitHub Actions의 운영 경로는 KRX Data Marketplace Open API를 사용합니다. `KRX_OPEN_API_KEY`를 GitHub Actions Secret으로 등록하고, KRX에서 아래 서비스를 각각 이용 신청해야 합니다.
+
+- 유가증권 일별매매정보 (`stk_bydd_trd`)
+- 코스닥 일별매매정보 (`ksq_bydd_trd`)
+- KOSPI 시리즈 일별시세정보 (`kospi_dd_trd`)
+- KOSDAQ 시리즈 일별시세정보 (`kosdaq_dd_trd`)
+
+일별 시세는 KRX가 확정한 거래일 데이터만 사용합니다. 따라서 장중 값이나 변경되기 쉬운 HTML 페이지를 추천 근거로 쓰지 않습니다. API 키가 없는 로컬 연구 실행에서는 기존 pykrx/Naver 경로가 호환용으로 남아 있지만, GitHub Actions 운영 실행은 키가 없으면 명확히 실패합니다.
 
 ## 흐름
 
@@ -132,7 +139,7 @@ python detector.py
 - `TELEGRAM_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `GSHEET_KEY`
-- `KRX_ID` / `KRX_PW` (선택사항; 없으면 Naver fallback)
+- `KRX_OPEN_API_KEY` (필수: 일일 스크리너·독립 타이밍 엔진의 공식 시세 데이터)
 
 ## Google Sheets 기록
 

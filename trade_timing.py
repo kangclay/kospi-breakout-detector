@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -28,6 +29,7 @@ import pandas as pd
 from pykrx import stock
 
 from daily_screener import _normalize_ohlcv
+from krx_open_api import KRXOpenAPIClient
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,10 @@ def position_timing(raw: pd.DataFrame, position: Position, config: TimingConfig 
 def _fetch_ohlcv(ticker: str, as_of_date: str, lookback_days: int = 360) -> pd.DataFrame:
     end = pd.Timestamp(as_of_date)
     start = end - pd.Timedelta(days=lookback_days)
+    key = os.getenv("KRX_OPEN_API_KEY", "").strip()
+    if key:
+        client = KRXOpenAPIClient(key)
+        return client.ticker_history(ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
     return stock.get_market_ohlcv_by_date(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
 
 
