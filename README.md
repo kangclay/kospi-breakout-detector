@@ -9,7 +9,8 @@ KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로
 - KOSPI/KOSDAQ 시장 스냅샷에서 시가총액·거래대금으로 1차 유동성 필터
 - 최근 가격 이력에서 20/60/120/200일 모멘텀, 이동평균 정배열, 신고가 접근도, 변동성, 낙폭 계산
 - PER/PBR/배당수익률 기반 가치 점수
-- 선택적으로 `data/fundamentals_latest.csv`를 연결해 ROE/ROIC/마진/성장률/부채비율을 점수에 반영
+- OpenDART에서 ROE·영업이익률·부채비율·매출/영업이익 증가율을 불러와 품질·성장 점수에 반영
+- 필요하면 `data/fundamentals_latest.csv`를 연결해 OpenDART 대신 자체 재무 스냅샷 사용
 - 기본 매수 기준은 점수 82점 이상·팩터 충족률 70% 이상이며, 75점 이상은 관찰 후보(`WATCH`)로 남김
 - KOSPI/KOSDAQ 지수의 60일선·200일선으로 시장국면 필터
 - KRX Data Marketplace Open API의 일별 전종목 OHLCV·시가총액·거래대금으로 유니버스와 가격 이력을 구성
@@ -33,7 +34,9 @@ python daily_screener.py --as-of-date 20260710 --top-n 10
 python daily_screener.py --min-score 82 --watch-score 75 --min-factor-coverage 0.70
 ```
 
-재무 스냅샷은 `data/fundamentals_latest.csv.example`의 컬럼을 따릅니다. `available_date`가 기준일 이후인 행은 자동으로 제외합니다. 파일이 없으면 가격·가치 중심으로 실행되고 결과에 `재무 스냅샷: 미사용`으로 표시됩니다.
+재무 스냅샷은 로컬 CSV를 우선하고, 파일이 없으면 `DART_API_KEY`로 OpenDART를 조회합니다. 공시 제출기한을 기준으로 해당 날짜에 이미 공개됐을 정기보고서만 사용하므로 미래 공시를 과거 추천에 섞지 않습니다. 자체 CSV는 `data/fundamentals_latest.csv.example`의 컬럼을 따르며, `available_date`가 기준일 이후인 행은 자동 제외됩니다.
+
+GitHub Actions의 일일 운영은 재무 데이터가 없으면 실패하도록 설정했습니다. OpenDART에서 인증키를 발급받아 저장소의 `Settings → Secrets and variables → Actions → New repository secret`에서 이름을 `DART_API_KEY`로 등록하세요. 인증키는 채팅이나 코드에 직접 넣지 않습니다.
 
 ## 독립 매수·매도 타이밍 엔진
 
@@ -140,6 +143,7 @@ python detector.py
 - `TELEGRAM_CHAT_ID`
 - `GSHEET_KEY`
 - `KRX_OPEN_API_KEY` (필수: 일일 스크리너·독립 타이밍 엔진의 공식 시세 데이터)
+- `DART_API_KEY` (필수: 일일 스크리너의 품질·성장 재무 팩터)
 
 ## Google Sheets 기록
 

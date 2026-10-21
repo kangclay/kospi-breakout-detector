@@ -5,9 +5,9 @@ optimizer.  The optimizer is useful for research, but its trade aggregation
 is not a portfolio simulation.  This module creates a daily, explainable
 candidate list using point-in-time market snapshots and price history.
 
-Optional accounting data can be supplied through
-``data/fundamentals_latest.csv``.  Rows are only used when ``available_date``
-is on or before the screen date.
+Accounting data is loaded from ``data/fundamentals_latest.csv`` when present,
+or from OpenDART. Rows are only used when ``available_date`` is on or before
+the screen date.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import requests
 from bs4 import BeautifulSoup
 from pykrx import stock
 
+from dart_fundamentals import OpenDARTError, load_dart_fundamentals
 from krx_open_api import KRXOpenAPIClient, KRXOpenAPIError
 
 
@@ -65,6 +66,7 @@ class ScreenConfig:
     request_sleep: float = 0.08
     allow_unknown_regime: bool = True
     fundamentals_path: str = "data/fundamentals_latest.csv"
+    require_fundamentals: bool = False
     output_dir: str = "reports"
 
 
@@ -214,6 +216,34 @@ def _load_fundamentals(path: str, asof_date: str) -> pd.DataFrame:
     frame = frame[frame["available_date"] <= asof].copy()
     frame = frame.sort_values("available_date").drop_duplicates("ticker", keep="last")
     return frame
+
+
+def _load_screen_fundamentals(
+    path: str,
+    asof_date: str,
+    required: bool = False,
+) -> tuple[pd.DataFrame, str]:
+    """Prefer a local point-in-time snapshot, then use official OpenDART."""
+    local = _load_fundamentals(path, asof_date)
+    if not local.empty:
+        return local, "csv"
+
+    api_key = os.getenv("DART_API_KEY", "").strip()
+    if not api_key:
+        if required:
+            raise RuntimeError(
+                "재무 팩터 데이터가 필요합니다. DART_API_KEY GitHub Secret을 설정하거나 "
+                "data/fundamentals_latest.csv를 추가하세요."
+            )
+        return pd.DataFrame(), "none"
+
+    try:
+        frame = load_dart_fundamentals(api_key, asof_date)
+    except OpenDARTError as exc:
+        raise RuntimeError(f"OpenDART 재무 스냅샷 조회 실패: {exc}") from exc
+    if frame.empty:
+        raise RuntimeError("OpenDART 재무 스냅샷이 비어 있습니다.")
+    return frame, "opendart"
 
 
 def _fundamental_scores(frame: pd.DataFrame) -> pd.DataFrame:
@@ -571,6 +601,15 @@ def _prepare_market_rows(
 
     if not fundamentals.empty:
         result = result.merge(fundamentals, on="ticker", how="left", suffixes=("", "_fund"))
+        # Market snapshots may contain an empty ROE proxy. Prefer the filing
+        # value without losing a valid market-snapshot value when a filing is
+        # unavailable for one ticker.
+        for column in ["roe", "roic", "operating_margin", "debt_ratio", "sales_yoy", "op_profit_yoy", "fcf_yield"]:
+            filed_column = f"{column}_fund"
+            if filed_column in result.columns:
+                base = pd.to_numeric(result[column], errors="coerce") if column in result.columns else pd.Series(np.nan, index=result.index)
+                result[column] = pd.to_numeric(result[filed_column], errors="coerce").combine_first(base)
+                result = result.drop(columns=[filed_column])
         result = _fundamental_scores(result)
     else:
         result["quality_score"] = _percentile(result["roe"]) if "roe" in result.columns else float("nan")
@@ -609,11 +648,16 @@ def _prepare_market_rows(
 def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[pd.DataFrame, dict]:
     krx_open = _krx_open_client(config.request_sleep)
     resolved_asof = _resolve_asof_date(asof_date, config.markets, krx_open)
-    fundamentals = _load_fundamentals(config.fundamentals_path, resolved_asof)
+    fundamentals, fundamentals_source = _load_screen_fundamentals(
+        config.fundamentals_path,
+        resolved_asof,
+        required=config.require_fundamentals,
+    )
     frames = []
     stats = {
         "asof_date": resolved_asof,
         "fundamentals_available": bool(not fundamentals.empty),
+        "fundamentals_source": fundamentals_source,
         "min_score": config.min_score,
         "watch_score": config.watch_score,
         "min_factor_coverage": config.min_factor_coverage,
@@ -650,7 +694,9 @@ def _format_number(value: object, digits: int = 1) -> str:
 
 def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
     if stats.get("fundamentals_available"):
-        fundamental_status = "사용"
+        source_labels = {"opendart": "OpenDART", "csv": "CSV"}
+        source = source_labels.get(stats.get("fundamentals_source"), "외부 데이터")
+        fundamental_status = f"사용({source})"
     elif stats.get("quality_proxy_available"):
         fundamental_status = "미사용(가격·가치+ROE 프록시)"
     else:
@@ -797,6 +843,7 @@ def main() -> None:
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--require-krx-open-api", action="store_true", help="KRX_OPEN_API_KEY가 없으면 실행을 실패 처리")
+    parser.add_argument("--require-fundamentals", action="store_true", help="CSV 또는 DART_API_KEY가 없으면 실행을 실패 처리")
     parser.add_argument("--notify", action="store_true")
     parser.add_argument("--log-sheet", action="store_true")
     args = parser.parse_args()
@@ -814,6 +861,7 @@ def main() -> None:
         min_factor_coverage=args.min_factor_coverage,
         request_sleep=args.request_sleep,
         fundamentals_path=args.fundamentals_path,
+        require_fundamentals=args.require_fundamentals,
         output_dir=args.output_dir,
     )
     result, stats = run_screen(config, args.as_of_date.strip() or None)

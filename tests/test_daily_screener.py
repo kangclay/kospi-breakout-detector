@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 
-from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _log_sheet, _send_telegram, build_price_features
+from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _load_screen_fundamentals, _log_sheet, _send_telegram, build_message, build_price_features
 from krx_open_api import KRXOpenAPIClient
 
 
@@ -124,6 +124,48 @@ class DailyScreenerTest(unittest.TestCase):
         scored = _fundamental_scores(frame)
         self.assertTrue((scored["quality_score"] > 0).all())
         self.assertTrue((scored["catalyst_score"] > 0).all())
+
+    def test_dart_quality_and_growth_raise_factor_coverage_to_eighty_percent(self):
+        frame = pd.DataFrame(
+            {
+                "ret_20": [0.1, 0.2],
+                "ret_60": [0.2, 0.1],
+                "ret_120": [0.3, 0.2],
+                "ret_200": [0.4, 0.1],
+                "dist_high120": [-0.01, -0.10],
+                "ma20_vs_ma60": [0.04, 0.01],
+                "per_positive": [np.nan, np.nan],
+                "pbr_positive": [np.nan, np.nan],
+                "dividend_yield": [np.nan, np.nan],
+                "volatility20": [0.2, 0.4],
+                "drawdown60": [-0.05, -0.20],
+                "quality_score": [90.0, 10.0],
+                "catalyst_score": [80.0, 20.0],
+            }
+        )
+        scored = _add_cross_sectional_scores(frame)
+        self.assertTrue(np.allclose(scored["factor_coverage"], 0.8))
+
+    def test_required_fundamentals_fail_clearly_without_csv_or_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "DART_API_KEY"):
+                _load_screen_fundamentals("data/does_not_exist.csv", "20261021", required=True)
+
+    def test_message_names_opendart_source(self):
+        message = build_message(
+            pd.DataFrame(),
+            {
+                "asof_date": "20261021",
+                "fundamentals_available": True,
+                "fundamentals_source": "opendart",
+                "data_provider": "krx_open_api",
+                "min_score": 82,
+                "min_factor_coverage": 0.7,
+                "markets": [],
+            },
+            10,
+        )
+        self.assertIn("재무 스냅샷: 사용(OpenDART)", message)
 
     def test_telegram_http_error_does_not_fail_screening(self):
         import os
