@@ -748,7 +748,8 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
         lines.append(f"{market_stat.get('market')}: regime={regime.get('state', 'UNKNOWN')} history={market_stat.get('history_count', 0)}")
 
     if result.empty:
-        lines.append("\n조건을 만족한 후보가 없습니다.")
+        lines.append("\n오늘의 BUY_CANDIDATE가 없습니다.")
+        lines.append("\n오늘의 STOCK_BUY_CANDIDATE가 없습니다.")
         return "\n".join(lines)
 
     candidates = result[result["action"] == "BUY_CANDIDATE"].head(top_n)
@@ -779,6 +780,8 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
                 f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
                 f"stop(ATR2)={_format_number(row.stop_price_atr2, 0)}"
             )
+    else:
+        lines.append("\n오늘의 STOCK_BUY_CANDIDATE가 없습니다.")
     if not watch.empty:
         lines.append("\n[WATCH]")
         for row in watch.itertuples(index=False):

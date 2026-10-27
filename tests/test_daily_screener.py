@@ -206,6 +206,7 @@ class DailyScreenerTest(unittest.TestCase):
             10,
         )
         self.assertIn("재무 스냅샷: 사용(OpenDART)", message)
+        self.assertIn("오늘의 STOCK_BUY_CANDIDATE가 없습니다.", message)
 
     def test_message_separates_individual_candidate_from_market_confirmed_candidate(self):
         result = pd.DataFrame(
