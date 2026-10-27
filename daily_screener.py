@@ -26,7 +26,6 @@ import numpy as np
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from pykrx import stock
 
 from dart_fundamentals import OpenDARTError, load_dart_fundamentals
 from krx_open_api import KRXOpenAPIClient, KRXOpenAPIError
@@ -45,6 +44,17 @@ FACTOR_WEIGHTS = {
     "catalyst_score": 0.10,
     "risk_score": 0.10,
 }
+_LEGACY_STOCK = None
+
+
+def _legacy_stock():
+    """Import pykrx only when the local compatibility path is actually used."""
+    global _LEGACY_STOCK
+    if _LEGACY_STOCK is None:
+        from pykrx import stock as pykrx_stock
+
+        _LEGACY_STOCK = pykrx_stock
+    return _LEGACY_STOCK
 
 
 @dataclass
@@ -440,9 +450,10 @@ def _load_market_snapshot(
         return _load_krx_open_market_snapshot(krx_open, asof_date, market)
     if os.getenv("KRX_ID") and os.getenv("KRX_PW"):
         try:
-            price = _normalize_snapshot(stock.get_market_ohlcv_by_ticker(asof_date, market=market), "price_")
-            cap = _normalize_snapshot(stock.get_market_cap_by_ticker(asof_date, market=market), "cap_")
-            fundamental = _normalize_snapshot(stock.get_market_fundamental_by_ticker(asof_date, market=market), "fund_")
+            legacy = _legacy_stock()
+            price = _normalize_snapshot(legacy.get_market_ohlcv_by_ticker(asof_date, market=market), "price_")
+            cap = _normalize_snapshot(legacy.get_market_cap_by_ticker(asof_date, market=market), "cap_")
+            fundamental = _normalize_snapshot(legacy.get_market_fundamental_by_ticker(asof_date, market=market), "fund_")
             if not price.empty:
                 merged = price.merge(cap, on="ticker", how="left").merge(fundamental, on="ticker", how="left")
                 merged["market"] = market
@@ -502,7 +513,7 @@ def _load_regime(
         elif not (os.getenv("KRX_ID") and os.getenv("KRX_PW")):
             normalized = _load_naver_index_history(market, pages=40)
         else:
-            raw = stock.get_index_ohlcv_by_date(start, asof_date, index_code)
+            raw = _legacy_stock().get_index_ohlcv_by_date(start, asof_date, index_code)
             if raw is None or raw.empty:
                 return {"state": "UNKNOWN", "reason": "empty index data"}
             normalized = raw.reset_index().rename(columns={"날짜": "Date", "종가": "Close"})
@@ -527,7 +538,7 @@ def _load_regime(
 
 def _safe_name(ticker: str) -> str:
     try:
-        return stock.get_market_ticker_name(ticker) or ticker
+        return _legacy_stock().get_market_ticker_name(ticker) or ticker
     except Exception:
         return ticker
 
@@ -566,7 +577,7 @@ def _prepare_market_rows(
     for item in snapshot.itertuples(index=False):
         ticker = str(item.ticker)
         try:
-            raw = history_by_ticker.get(ticker, pd.DataFrame()) if krx_open is not None else stock.get_market_ohlcv_by_date(start_date, asof_date, ticker)
+            raw = history_by_ticker.get(ticker, pd.DataFrame()) if krx_open is not None else _legacy_stock().get_market_ohlcv_by_date(start_date, asof_date, ticker)
             features = build_price_features(raw, min_history=config.min_history)
             if not features:
                 continue
