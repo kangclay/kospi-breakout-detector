@@ -73,6 +73,30 @@ class DailyScreenerTest(unittest.TestCase):
         self.assertEqual(history["ticker"].unique().tolist(), ["005930"])
         self.assertEqual(len(history), 3)
 
+    def test_krx_open_api_retries_a_non_json_response(self):
+        bad_response = Mock()
+        bad_response.raise_for_status.return_value = None
+        bad_response.json.side_effect = ValueError("not json")
+        good_response = Mock()
+        good_response.raise_for_status.return_value = None
+        good_response.json.return_value = {}
+        session = Mock()
+        session.get.side_effect = [bad_response, good_response]
+        client = KRXOpenAPIClient(
+            "test-key",
+            request_sleep=0,
+            request_retries=2,
+            retry_backoff=0.01,
+            session=session,
+        )
+
+        with patch("krx_open_api.time.sleep") as sleep:
+            frame = client.market_daily("KOSDAQ", "20261027")
+
+        self.assertTrue(frame.empty)
+        self.assertEqual(session.get.call_count, 2)
+        sleep.assert_called_once_with(0.01)
+
     def test_build_price_features_has_trend_and_atr(self):
         features = build_price_features(_make_ohlcv())
         self.assertTrue(features["trend_ok"])

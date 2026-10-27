@@ -8,9 +8,10 @@ unofficial request for every ticker.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Iterable
 
@@ -66,41 +67,64 @@ def _records(payload: object) -> list[dict]:
 @dataclass
 class KRXOpenAPIClient:
     auth_key: str
-    request_sleep: float = 0.02
+    request_sleep: float = 0.15
     session: requests.Session | None = None
-    max_workers: int = 8
+    max_workers: int = 4
+    request_retries: int = 4
+    retry_backoff: float = 1.0
+    _request_lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
+    _last_request_at: float = field(init=False, default=0.0, repr=False)
 
     def __post_init__(self) -> None:
         if not self.auth_key:
             raise ValueError("KRX Open API 인증키가 필요합니다.")
         if self.max_workers < 1:
             raise ValueError("max_workers must be at least 1")
+        if self.request_retries < 1:
+            raise ValueError("request_retries must be at least 1")
+
+    def _throttle(self) -> None:
+        """Rate-limit request starts across all worker threads."""
+        if self.request_sleep <= 0:
+            return
+        with self._request_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            remaining = self.request_sleep - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            self._last_request_at = time.monotonic()
 
     def _get(self, endpoint: str, date: str) -> list[dict]:
         # A supplied Session is useful for unit tests.  Live history loading is
         # concurrent, so use requests.get rather than sharing one Session
         # between worker threads.
         get = self.session.get if self.session is not None else requests.get
-        response = get(
-            f"{BASE_URL}/{endpoint}",
-            headers={"AUTH_KEY": self.auth_key},
-            params={"basDd": date},
-            timeout=30,
-        )
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            raise KRXOpenAPIError(f"KRX API 요청 실패({response.status_code}): {endpoint} {date}") from exc
-        try:
-            return _records(response.json())
-        except ValueError as exc:
-            raise KRXOpenAPIError("KRX API가 JSON이 아닌 응답을 반환했습니다.") from exc
+        last_error: Exception | None = None
+        for attempt in range(1, self.request_retries + 1):
+            self._throttle()
+            try:
+                response = get(
+                    f"{BASE_URL}/{endpoint}",
+                    headers={"AUTH_KEY": self.auth_key},
+                    params={"basDd": date},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return _records(response.json())
+            except (requests.RequestException, ValueError, KRXOpenAPIError) as exc:
+                last_error = exc
+                if attempt < self.request_retries:
+                    time.sleep(self.retry_backoff * (2 ** (attempt - 1)))
+
+        status = getattr(getattr(last_error, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if status is not None else type(last_error).__name__
+        raise KRXOpenAPIError(
+            f"KRX API 요청이 {self.request_retries}회 실패했습니다({detail}): {endpoint} {date}"
+        ) from last_error
 
     def market_daily(self, market: str, date: str) -> pd.DataFrame:
         endpoint = MARKET_ENDPOINTS[market]
         rows = self._get(endpoint, date)
-        if self.request_sleep:
-            time.sleep(self.request_sleep)
         if not rows:
             return pd.DataFrame(columns=["ticker", "name", "Date", "Open", "High", "Low", "Close", "Volume", "TradingValue", "market_cap", "market"])
 
@@ -146,10 +170,7 @@ class KRXOpenAPIClient:
         dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D").strftime("%Y%m%d").tolist()
 
         def load_one(date: str) -> list[dict]:
-            response_rows = self._get(INDEX_ENDPOINTS[market], date)
-            if self.request_sleep:
-                time.sleep(self.request_sleep)
-            return response_rows
+            return self._get(INDEX_ENDPOINTS[market], date)
 
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(dates) or 1)) as executor:
             response_sets = executor.map(load_one, dates)

@@ -63,7 +63,7 @@ class ScreenConfig:
     min_score: float = 82.0
     watch_score: float = 75.0
     min_factor_coverage: float = 0.70
-    request_sleep: float = 0.08
+    request_sleep: float = 0.15
     allow_unknown_regime: bool = True
     fundamentals_path: str = "data/fundamentals_latest.csv"
     require_fundamentals: bool = False
@@ -839,7 +839,7 @@ def main() -> None:
     parser.add_argument("--min-score", type=float, default=ScreenConfig.min_score)
     parser.add_argument("--watch-score", type=float, default=ScreenConfig.watch_score)
     parser.add_argument("--min-factor-coverage", type=float, default=ScreenConfig.min_factor_coverage)
-    parser.add_argument("--request-sleep", type=float, default=0.08)
+    parser.add_argument("--request-sleep", type=float, default=0.15)
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--require-krx-open-api", action="store_true", help="KRX_OPEN_API_KEY가 없으면 실행을 실패 처리")
