@@ -67,9 +67,9 @@ def _records(payload: object) -> list[dict]:
 @dataclass
 class KRXOpenAPIClient:
     auth_key: str
-    request_sleep: float = 0.15
+    request_sleep: float = 0.25
     session: requests.Session | None = None
-    max_workers: int = 4
+    max_workers: int = 2
     request_retries: int = 4
     retry_backoff: float = 1.0
     _request_lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
@@ -149,7 +149,9 @@ class KRXOpenAPIClient:
     def market_history(self, market: str, start: str, end: str, tickers: Iterable[str] | None = None) -> pd.DataFrame:
         wanted = {str(ticker).zfill(6) for ticker in tickers} if tickers is not None else None
         rows = []
-        dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D").strftime("%Y%m%d").tolist()
+        # KRX is closed on weekends. Excluding them avoids roughly 30% of the
+        # requests; Korean public holidays are harmless empty responses.
+        dates = pd.bdate_range(pd.Timestamp(start), pd.Timestamp(end)).strftime("%Y%m%d").tolist()
         # One request contains the entire market for the selected date.  Fetch
         # dates concurrently, while keeping the worker count deliberately low
         # enough to stay far below KRX's daily request limit.
@@ -167,7 +169,7 @@ class KRXOpenAPIClient:
     def index_history(self, market: str, start: str, end: str) -> pd.DataFrame:
         rows = []
         wanted_names = INDEX_NAMES[market]
-        dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D").strftime("%Y%m%d").tolist()
+        dates = pd.bdate_range(pd.Timestamp(start), pd.Timestamp(end)).strftime("%Y%m%d").tolist()
 
         def load_one(date: str) -> list[dict]:
             return self._get(INDEX_ENDPOINTS[market], date)

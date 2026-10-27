@@ -9,7 +9,7 @@ on:
 jobs:
   detector:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -43,4 +43,4 @@ jobs:
           KRX_OPEN_API_KEY: ${{ secrets.KRX_OPEN_API_KEY }}
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
         run: |
-          python daily_screener.py --notify --log-sheet --require-krx-open-api --require-fundamentals
+          python -u daily_screener.py --notify --log-sheet --require-krx-open-api --require-fundamentals

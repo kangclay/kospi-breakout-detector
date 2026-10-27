@@ -44,7 +44,10 @@ class DartFundamentalsTest(unittest.TestCase):
     @patch("dart_fundamentals.OpenDARTClient.corporation_codes")
     def test_snapshot_maps_financial_indices_to_listed_ticker(self, corp_codes, indicators):
         corp_codes.return_value = pd.DataFrame(
-            [{"ticker": "005930", "corp_code": "00126380"}]
+            [
+                {"ticker": "005930", "corp_code": "00126380"},
+                {"ticker": "000660", "corp_code": "00164779"},
+            ]
         )
         indicators.return_value = [
             {"corp_code": "00126380", "stock_code": "005930", "idx_nm": "자기자본이익률", "idx_val": "12.5"},
@@ -52,13 +55,15 @@ class DartFundamentalsTest(unittest.TestCase):
             {"corp_code": "00126380", "stock_code": "005930", "idx_nm": "매출액증가율", "idx_val": "7.8%"},
         ]
 
-        frame = load_dart_fundamentals("test-key", "2026-10-21")
+        frame = load_dart_fundamentals("test-key", "2026-10-21", tickers=["005930"])
 
         self.assertEqual(frame.iloc[0]["ticker"], "005930")
         self.assertEqual(frame.iloc[0]["available_date"], "2026-08-15")
         self.assertEqual(float(frame.iloc[0]["roe"]), 12.5)
         self.assertEqual(float(frame.iloc[0]["debt_ratio"]), 35.2)
         self.assertEqual(float(frame.iloc[0]["sales_yoy"]), 7.8)
+        requested_codes = indicators.call_args.args[0]
+        self.assertEqual(requested_codes, ["00126380"])
 
 
 if __name__ == "__main__":

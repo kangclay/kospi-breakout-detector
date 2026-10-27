@@ -50,9 +50,9 @@ FACTOR_WEIGHTS = {
 @dataclass
 class ScreenConfig:
     markets: tuple[str, ...] = ("KOSPI", "KOSDAQ")
-    # 365 calendar days safely supplies the 200 trading sessions needed by the
-    # longest factor, while avoiding unnecessary KRX daily API calls.
-    lookback_days: int = 365
+    # 320 calendar days normally supplies more than 200 trading sessions while
+    # keeping the official KRX daily-request workload inside the Actions window.
+    lookback_days: int = 320
     prefilter_limit: int = 300
     top_n: int = 10
     min_market_cap: float = 100_000_000_000.0
@@ -63,7 +63,7 @@ class ScreenConfig:
     min_score: float = 82.0
     watch_score: float = 75.0
     min_factor_coverage: float = 0.70
-    request_sleep: float = 0.15
+    request_sleep: float = 0.25
     allow_unknown_regime: bool = True
     fundamentals_path: str = "data/fundamentals_latest.csv"
     require_fundamentals: bool = False
@@ -222,6 +222,7 @@ def _load_screen_fundamentals(
     path: str,
     asof_date: str,
     required: bool = False,
+    tickers: Iterable[str] | None = None,
 ) -> tuple[pd.DataFrame, str]:
     """Prefer a local point-in-time snapshot, then use official OpenDART."""
     local = _load_fundamentals(path, asof_date)
@@ -238,7 +239,7 @@ def _load_screen_fundamentals(
         return pd.DataFrame(), "none"
 
     try:
-        frame = load_dart_fundamentals(api_key, asof_date)
+        frame = load_dart_fundamentals(api_key, asof_date, tickers=tickers)
     except OpenDARTError as exc:
         raise RuntimeError(f"OpenDART 재무 스냅샷 조회 실패: {exc}") from exc
     if frame.empty:
@@ -648,10 +649,28 @@ def _prepare_market_rows(
 def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[pd.DataFrame, dict]:
     krx_open = _krx_open_client(config.request_sleep)
     resolved_asof = _resolve_asof_date(asof_date, config.markets, krx_open)
+    snapshots: dict[str, pd.DataFrame] = {}
+    snapshot_errors: dict[str, str] = {}
+    fundamental_tickers: set[str] = set()
+    for market in config.markets:
+        try:
+            snapshot = _load_market_snapshot(resolved_asof, market, config.prefilter_limit, krx_open)
+            snapshots[market] = snapshot
+            eligible = snapshot[
+                (snapshot["market_cap"] >= config.min_market_cap)
+                & (snapshot["trading_value_today"] >= config.min_trading_value)
+                & (snapshot["close_snapshot"] > 0)
+            ].sort_values(["market_cap", "trading_value_today"], ascending=False).head(config.prefilter_limit)
+            fundamental_tickers.update(eligible["ticker"].astype(str))
+        except Exception as exc:
+            print(f"[ERROR] {market} snapshot failed: {exc}", flush=True)
+            snapshot_errors[market] = str(exc)[:180]
+
     fundamentals, fundamentals_source = _load_screen_fundamentals(
         config.fundamentals_path,
         resolved_asof,
         required=config.require_fundamentals,
+        tickers=sorted(fundamental_tickers),
     )
     frames = []
     stats = {
@@ -666,12 +685,10 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
     }
 
     for market in config.markets:
-        try:
-            snapshot = _load_market_snapshot(resolved_asof, market, config.prefilter_limit, krx_open)
-        except Exception as exc:
-            print(f"[ERROR] {market} snapshot failed: {exc}")
-            stats["markets"].append({"market": market, "snapshot_count": 0, "prefilter_count": 0, "history_count": 0, "error": str(exc)[:180]})
+        if market in snapshot_errors:
+            stats["markets"].append({"market": market, "snapshot_count": 0, "prefilter_count": 0, "history_count": 0, "error": snapshot_errors[market]})
             continue
+        snapshot = snapshots.get(market, pd.DataFrame())
         frame, market_stats = _prepare_market_rows(snapshot, market, resolved_asof, config, fundamentals, krx_open)
         if not frame.empty:
             frames.append(frame)
@@ -839,7 +856,7 @@ def main() -> None:
     parser.add_argument("--min-score", type=float, default=ScreenConfig.min_score)
     parser.add_argument("--watch-score", type=float, default=ScreenConfig.watch_score)
     parser.add_argument("--min-factor-coverage", type=float, default=ScreenConfig.min_factor_coverage)
-    parser.add_argument("--request-sleep", type=float, default=0.15)
+    parser.add_argument("--request-sleep", type=float, default=0.25)
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--require-krx-open-api", action="store_true", help="KRX_OPEN_API_KEY가 없으면 실행을 실패 처리")

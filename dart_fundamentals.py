@@ -164,12 +164,19 @@ class OpenDARTClient:
         return rows
 
 
-def load_dart_fundamentals(api_key: str, asof_date: str) -> pd.DataFrame:
+def load_dart_fundamentals(
+    api_key: str,
+    asof_date: str,
+    tickers: Iterable[str] | None = None,
+) -> pd.DataFrame:
     """Build one point-in-time quality/growth snapshot per listed ticker."""
     client = OpenDARTClient(api_key)
     mapping = client.corporation_codes()
+    if tickers is not None:
+        wanted = {str(ticker).zfill(6) for ticker in tickers}
+        mapping = mapping[mapping["ticker"].isin(wanted)].copy()
     if mapping.empty:
-        raise OpenDARTError("OpenDART 상장사 고유번호 목록이 비어 있습니다.")
+        raise OpenDARTError("OpenDART 조회 대상의 상장사 고유번호 목록이 비어 있습니다.")
 
     period = report_period_for(asof_date)
     indicators = client.financial_indices(mapping["corp_code"].tolist(), period)

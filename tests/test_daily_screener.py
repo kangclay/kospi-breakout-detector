@@ -67,9 +67,10 @@ class DailyScreenerTest(unittest.TestCase):
             )
 
         client.market_daily = fake_daily
-        history = client.market_history("KOSPI", "20261001", "20261003", tickers=["005930"])
+        history = client.market_history("KOSPI", "20261001", "20261005", tickers=["005930"])
 
         self.assertEqual(len(calls), 3)
+        self.assertEqual([date for _, date in calls], ["20261001", "20261002", "20261005"])
         self.assertEqual(history["ticker"].unique().tolist(), ["005930"])
         self.assertEqual(len(history), 3)
 
