@@ -1,12 +1,31 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
+import requests
 
-from dart_fundamentals import _metric_name, load_dart_fundamentals, report_period_for
+from dart_fundamentals import OpenDARTClient, _metric_name, load_dart_fundamentals, report_period_for
 
 
 class DartFundamentalsTest(unittest.TestCase):
+    def test_client_retries_a_connect_timeout(self):
+        response = Mock(status_code=200)
+        session = Mock()
+        session.get.side_effect = [requests.ConnectTimeout(), response]
+        client = OpenDARTClient(
+            "test-key",
+            session=session,
+            request_retries=2,
+            retry_backoff=0.01,
+        )
+
+        with patch("dart_fundamentals.time.sleep") as sleep:
+            result = client._get("corpCode.xml", {})
+
+        self.assertIs(result, response)
+        self.assertEqual(session.get.call_count, 2)
+        sleep.assert_called_once_with(0.01)
+
     def test_report_period_uses_latest_conservatively_available_filing(self):
         half_year = report_period_for("2026-10-21")
         self.assertEqual((half_year.business_year, half_year.report_code), (2026, "11012"))

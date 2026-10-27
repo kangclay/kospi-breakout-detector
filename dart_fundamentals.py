@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import date
@@ -76,24 +77,47 @@ def _metric_name(value: object) -> str:
 
 
 class OpenDARTClient:
-    def __init__(self, api_key: str, session: requests.Session | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        session: requests.Session | None = None,
+        request_retries: int = 4,
+        retry_backoff: float = 1.0,
+    ):
         if not api_key:
             raise ValueError("OpenDART API 인증키가 필요합니다.")
+        if request_retries < 1:
+            raise ValueError("request_retries must be at least 1")
         self.api_key = api_key
         self.session = session or requests.Session()
+        self.request_retries = request_retries
+        self.retry_backoff = retry_backoff
 
     def _get(self, endpoint: str, params: dict[str, str]) -> requests.Response:
-        try:
-            response = self.session.get(
-                f"{DART_BASE_URL}/{endpoint}",
-                params={"crtfc_key": self.api_key, **params},
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise OpenDARTError(f"OpenDART 네트워크 요청 실패: {type(exc).__name__}") from None
-        if response.status_code != 200:
-            raise OpenDARTError(f"OpenDART HTTP 요청 실패({response.status_code}): {endpoint}")
-        return response
+        last_error: requests.RequestException | None = None
+        last_status: int | None = None
+        for attempt in range(1, self.request_retries + 1):
+            try:
+                response = self.session.get(
+                    f"{DART_BASE_URL}/{endpoint}",
+                    params={"crtfc_key": self.api_key, **params},
+                    timeout=(10, 60),
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+            else:
+                last_status = response.status_code
+                if response.status_code == 200:
+                    return response
+                if response.status_code != 429 and response.status_code < 500:
+                    raise OpenDARTError(f"OpenDART HTTP 요청 실패({response.status_code}): {endpoint}")
+            if attempt < self.request_retries:
+                time.sleep(self.retry_backoff * (2 ** (attempt - 1)))
+
+        if last_status is not None:
+            raise OpenDARTError(f"OpenDART HTTP 요청이 {self.request_retries}회 실패했습니다({last_status}): {endpoint}")
+        detail = type(last_error).__name__ if last_error is not None else "UnknownError"
+        raise OpenDARTError(f"OpenDART 네트워크 요청이 {self.request_retries}회 실패했습니다: {detail}")
 
     def corporation_codes(self) -> pd.DataFrame:
         response = self._get("corpCode.xml", {})
