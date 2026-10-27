@@ -12,6 +12,7 @@ KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로
 - OpenDART에서 ROE·영업이익률·부채비율·매출/영업이익 증가율을 불러와 품질·성장 점수에 반영
 - 필요하면 `data/fundamentals_latest.csv`를 연결해 OpenDART 대신 자체 재무 스냅샷 사용
 - 기본 매수 기준은 점수 82점 이상·팩터 충족률 70% 이상이며, 75점 이상은 관찰 후보(`WATCH`)로 남김
+- 시장국면까지 통과하면 `BUY_CANDIDATE`, 시장이 `OFF`여도 종목 자체 조건을 모두 충족하면 `STOCK_BUY_CANDIDATE`로 별도 표시
 - KOSPI/KOSDAQ 지수의 60일선·200일선으로 시장국면 필터
 - KRX Data Marketplace Open API의 일별 전종목 OHLCV·시가총액·거래대금으로 유니버스와 가격 이력을 구성
 - `reports/daily_screen.csv`와 `reports/daily_screen.json` 생성

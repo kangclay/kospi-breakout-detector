@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 
-from daily_screener import ScreenConfig, _add_cross_sectional_scores, _fundamental_scores, _load_screen_fundamentals, _log_sheet, _send_telegram, build_message, build_price_features
+from daily_screener import ScreenConfig, _add_cross_sectional_scores, _assign_actions, _fundamental_scores, _load_screen_fundamentals, _log_sheet, _send_telegram, build_message, build_price_features
 from krx_open_api import KRXOpenAPIClient
 
 
@@ -135,6 +135,21 @@ class DailyScreenerTest(unittest.TestCase):
         self.assertEqual(config.watch_score, 75.0)
         self.assertEqual(config.min_factor_coverage, 0.70)
 
+    def test_market_off_keeps_a_strong_stock_as_individual_candidate(self):
+        frame = pd.DataFrame(
+            {
+                "trend_ok": [True, True],
+                "not_chasing": [True, True],
+                "score": [85.0, 85.0],
+                "factor_coverage": [0.8, 0.8],
+                "regime_ok": [True, False],
+            }
+        )
+
+        classified = _assign_actions(frame, ScreenConfig())
+
+        self.assertEqual(classified["action"].tolist(), ["BUY_CANDIDATE", "STOCK_BUY_CANDIDATE"])
+
     def test_fundamental_scores_are_computed(self):
         frame = pd.DataFrame(
             {
@@ -191,6 +206,38 @@ class DailyScreenerTest(unittest.TestCase):
             10,
         )
         self.assertIn("재무 스냅샷: 사용(OpenDART)", message)
+
+    def test_message_separates_individual_candidate_from_market_confirmed_candidate(self):
+        result = pd.DataFrame(
+            [
+                {
+                    "ticker": "005930",
+                    "name": "삼성전자",
+                    "market": "KOSPI",
+                    "action": "STOCK_BUY_CANDIDATE",
+                    "score": 85.0,
+                    "close": 70_000,
+                    "momentum_score": 90.0,
+                    "value_score": 70.0,
+                    "factor_coverage": 0.8,
+                    "stop_price_atr2": 65_000,
+                }
+            ]
+        )
+        message = build_message(
+            result,
+            {
+                "asof_date": "20261027",
+                "min_score": 82,
+                "min_factor_coverage": 0.7,
+                "markets": [],
+            },
+            10,
+        )
+
+        self.assertIn("오늘의 BUY_CANDIDATE가 없습니다.", message)
+        self.assertIn("[STOCK_BUY_CANDIDATE · 시장국면 OFF]", message)
+        self.assertIn("삼성전자", message)
 
     def test_telegram_http_error_does_not_fail_screening(self):
         import os

@@ -543,6 +543,21 @@ def _safe_name(ticker: str) -> str:
         return ticker
 
 
+def _assign_actions(result: pd.DataFrame, config: ScreenConfig) -> pd.DataFrame:
+    stock_buy_ok = (
+        result["trend_ok"]
+        & result["not_chasing"]
+        & (result["score"] >= config.min_score)
+        & (result["factor_coverage"] >= config.min_factor_coverage)
+    )
+    result["action"] = np.select(
+        [stock_buy_ok & result["regime_ok"], stock_buy_ok],
+        ["BUY_CANDIDATE", "STOCK_BUY_CANDIDATE"],
+        default=np.where((result["score"] >= config.watch_score) & result["trend_ok"], "WATCH", "PASS"),
+    )
+    return result
+
+
 def _prepare_market_rows(
     snapshot: pd.DataFrame,
     market: str,
@@ -633,15 +648,7 @@ def _prepare_market_rows(
     result = _add_cross_sectional_scores(result)
     result["rank"] = np.arange(1, len(result) + 1)
     result["stop_price_atr2"] = result["close"] - 2.0 * result["atr14"]
-    result["action"] = np.where(
-        result["regime_ok"]
-        & result["trend_ok"]
-        & result["not_chasing"]
-        & (result["score"] >= config.min_score)
-        & (result["factor_coverage"] >= config.min_factor_coverage),
-        "BUY_CANDIDATE",
-        np.where((result["score"] >= config.watch_score) & result["trend_ok"], "WATCH", "PASS"),
-    )
+    result = _assign_actions(result, config)
     result["regime_close"] = _as_float(regime.get("close"))
     result["regime_ma60"] = _as_float(regime.get("ma60"))
     result["regime_ma200"] = _as_float(regime.get("ma200"))
@@ -710,7 +717,8 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
 
     result = pd.concat(frames, ignore_index=True)
     stats["quality_proxy_available"] = bool("quality_proxy_available" in result.columns and result["quality_proxy_available"].any())
-    result = result.sort_values(["action", "score"], key=lambda column: column.map({"BUY_CANDIDATE": 0, "WATCH": 1, "PASS": 2}) if column.name == "action" else column, ascending=[True, False]).reset_index(drop=True)
+    action_order = {"BUY_CANDIDATE": 0, "STOCK_BUY_CANDIDATE": 1, "WATCH": 2, "PASS": 3}
+    result = result.sort_values(["action", "score"], key=lambda column: column.map(action_order) if column.name == "action" else column, ascending=[True, False]).reset_index(drop=True)
     result["rank"] = np.arange(1, len(result) + 1)
     return result, stats
 
@@ -744,12 +752,25 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
         return "\n".join(lines)
 
     candidates = result[result["action"] == "BUY_CANDIDATE"].head(top_n)
+    stock_candidates = result[result["action"] == "STOCK_BUY_CANDIDATE"].head(top_n)
     watch = result[result["action"] == "WATCH"].head(max(3, top_n // 2))
     if candidates.empty:
         lines.append("\n오늘의 BUY_CANDIDATE가 없습니다.")
     else:
         lines.append("\n[BUY_CANDIDATE]")
         for row in candidates.itertuples(index=False):
+            name = getattr(row, "name", "") or _safe_name(row.ticker)
+            lines.append(
+                f"- {row.ticker} {name} [{row.market}] "
+                f"score={_format_number(row.score, 1)} close={_format_number(row.close, 0)} "
+                f"mom={_format_number(row.momentum_score, 0)} value={_format_number(row.value_score, 0)} "
+                f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
+                f"stop(ATR2)={_format_number(row.stop_price_atr2, 0)}"
+            )
+    if not stock_candidates.empty:
+        lines.append("\n[STOCK_BUY_CANDIDATE · 시장국면 OFF]")
+        lines.append("※ 시장은 OFF이지만 종목 자체 매수 조건을 모두 충족한 후보입니다. 비중 축소 또는 추가 확인이 필요합니다.")
+        for row in stock_candidates.itertuples(index=False):
             name = getattr(row, "name", "") or _safe_name(row.ticker)
             lines.append(
                 f"- {row.ticker} {name} [{row.market}] "
@@ -836,7 +857,7 @@ def _log_sheet(result: pd.DataFrame) -> None:
     # A no-candidate day returns an empty DataFrame without result columns.
     # This is a valid screen outcome, not a Google Sheets logging failure.
     if result.empty or "action" not in result.columns:
-        print("[INFO] 기록할 BUY_CANDIDATE가 없어 Google Sheets 추가를 건너뜁니다.")
+        print("[INFO] 기록할 매수 후보가 없어 Google Sheets 추가를 건너뜁니다.")
         return
     try:
         from sheet_logger import log_selection
@@ -844,13 +865,15 @@ def _log_sheet(result: pd.DataFrame) -> None:
         print(f"[WARN] sheet logger unavailable: {exc}")
         return
 
-    for row in result[result["action"] == "BUY_CANDIDATE"].itertuples(index=False):
+    buy_actions = {"BUY_CANDIDATE", "STOCK_BUY_CANDIDATE"}
+    for row in result[result["action"].isin(buy_actions)].itertuples(index=False):
         try:
+            strategy_prefix = "daily_multifactor:individual" if row.action == "STOCK_BUY_CANDIDATE" else "daily_multifactor"
             log_selection(
                 ticker=row.ticker,
                 name=getattr(row, "name", "") or _safe_name(row.ticker),
                 close_price=float(row.close),
-                method=f"daily_multifactor:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
+                method=f"{strategy_prefix}:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
                 when=datetime.strptime(str(row.data_date), "%Y-%m-%d"),
             )
         except Exception as exc:
