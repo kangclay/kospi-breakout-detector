@@ -2,6 +2,27 @@
 
 KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로 기술적 전략을 백테스트하는 저장소입니다.
 
+## 미국주식 일일 스크리너
+
+`us_screener.py`는 국내 모델과 완전히 분리된 Nasdaq-100 가격·유동성 스크리너입니다. Alpaca 무료 IEX 일봉을 읽기만 하며 주문 API는 호출하지 않습니다.
+
+- Nasdaq 공식 구성종목(2026-11-02 기준)을 `data/us_nasdaq100.csv`에 고정해 재현성 확보
+- 20/60/120/200일 모멘텀, 추세, 120일 고가 접근도, 변동성, 낙폭, 달러 거래대금으로 미국 전용 0~100점 산출
+- QQQ의 60일선·200일선으로 미국 시장국면 판정
+- 시장 ON에서 82점 이상이고 20일 고가 돌파·거래량 1.3배 확인 시 `US_BUY_CANDIDATE`, 확인 전은 `US_ENTRY_WATCH`
+- 시장 OFF에서는 88점 이상도 `US_OFF_WATCH` 관찰 전용
+- 실제 후보는 `us_recommendations`, 관찰 신호는 `us_observations` 탭에 기록하며 실제 추천은 14일간 중복 방지
+- Telegram 메시지는 `🇺🇸 US Daily Price-Factor Screen`으로 국내 알림과 구분
+- 미국 전용 점수는 국내 재무 멀티팩터 점수와 서로 비교할 수 없음
+
+GitHub Actions는 미국장 마감 후인 평일 23:20 UTC(한국시간 다음 날 08:20)에 별도 실행됩니다. 저장소 Secret에 `ALPACA_API_KEY`, `ALPACA_API_SECRET`, 기존 `GSHEET_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`가 필요합니다.
+
+로컬 실행:
+
+```bash
+python us_screener.py --notify --log-sheet
+```
+
 ## 일일 운영 스크리너
 
 `daily_screener.py`가 운영용 진입점입니다.
@@ -139,6 +160,8 @@ python detector.py
 
 - [daily_run.yml](/Users/goen/projects/kospi-breakout-detector/.github/workflows/daily_run.yml)
   평일 스케줄로 `daily_screener.py`를 실행합니다.
+- [us_daily_run.yml](/Users/goen/projects/kospi-breakout-detector/.github/workflows/us_daily_run.yml)
+  미국장 마감 후 `us_screener.py`를 독립 실행합니다.
 - [optimize.yml](/Users/goen/projects/kospi-breakout-detector/.github/workflows/optimize.yml)
   수동 실행으로 전략 최적화를 돌리고 `reports/` 결과를 아티팩트로 업로드합니다.
 
@@ -149,6 +172,8 @@ python detector.py
 - `GSHEET_KEY`
 - `KRX_OPEN_API_KEY` (필수: 일일 스크리너·독립 타이밍 엔진의 공식 시세 데이터)
 - `DART_API_KEY` (필수: 일일 스크리너의 품질·성장 재무 팩터)
+- `ALPACA_API_KEY` (필수: 미국주식 IEX 일봉 조회)
+- `ALPACA_API_SECRET` (필수: 미국주식 IEX 일봉 조회)
 
 ## Google Sheets 기록
 
