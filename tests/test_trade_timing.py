@@ -30,6 +30,7 @@ class TradeTimingTest(unittest.TestCase):
         result = entry_timing(frame)
         self.assertEqual(result["action"], "BUY_NOW")
         self.assertLess(result["initial_stop"], result["close"])
+        self.assertGreaterEqual(result["initial_stop"], result["close"] * 0.94)
 
     def test_entry_timing_requires_history(self):
         result = entry_timing(_prices(30))
@@ -47,6 +48,15 @@ class TradeTimingTest(unittest.TestCase):
         self.assertEqual(result["action"], "EXITED")
         self.assertEqual(result["reason"], "갭하락으로 시가 청산")
         self.assertEqual(result["exit_price"], 150.0)
+
+    def test_position_trail_activates_at_ten_percent_and_keeps_eight_percent_floor(self):
+        frame = _prices(75)
+        entry_index = 40
+        entry_date = frame.loc[entry_index, "Date"].strftime("%Y-%m-%d")
+        entry_price = float(frame.loc[entry_index, "Close"])
+        result = position_timing(frame, Position(entry_date, entry_price))
+        self.assertEqual(result["action"], "TRAIL_ACTIVE")
+        self.assertGreaterEqual(result["stop_price"], result["highest_high"] * 0.92)
 
     def test_positions_csv_accepts_recommendation_sheet_headers(self):
         with self.subTest("korean headers"):

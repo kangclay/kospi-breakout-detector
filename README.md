@@ -6,13 +6,16 @@ KOSPI/KOSDAQ 전체 시장에서 매일 매수 후보를 선별하고, 별도로
 
 `daily_screener.py`가 운영용 진입점입니다.
 
-- KOSPI/KOSDAQ 시장 스냅샷에서 시가총액·거래대금으로 1차 유동성 필터
+- KOSPI/KOSDAQ 시장 스냅샷에서 시가총액 1,000억원·당일/20일 평균 거래대금 20억원으로 유동성 필터
+- 우선주·스팩·리츠는 별도 전략이 필요하므로 운영 유니버스에서 제외
 - 최근 가격 이력에서 20/60/120/200일 모멘텀, 이동평균 정배열, 신고가 접근도, 변동성, 낙폭 계산
 - PER/PBR/배당수익률 기반 가치 점수
 - OpenDART에서 ROE·영업이익률·부채비율·매출/영업이익 증가율을 불러와 품질·성장 점수에 반영
 - 필요하면 `data/fundamentals_latest.csv`를 연결해 OpenDART 대신 자체 재무 스냅샷 사용
-- 기본 매수 기준은 점수 82점 이상·팩터 충족률 70% 이상이며, 75점 이상은 관찰 후보(`WATCH`)로 남김
-- 시장국면까지 통과하면 `BUY_CANDIDATE`, 시장이 `OFF`여도 종목 자체 조건을 모두 충족하면 `STOCK_BUY_CANDIDATE`로 별도 표시
+- 시장 `ON`은 82점, `UNKNOWN`은 85점 이상·팩터 충족률 70% 이상을 요구하며, 75점 이상은 일반 관찰 후보(`WATCH`)로 남김
+- 종목 조건 통과 후에도 20일 고가 돌파와 거래량 20일 평균의 1.3배를 확인해야 `BUY_CANDIDATE`; 확인 전에는 `ENTRY_WATCH`
+- 시장 `OFF`에서는 88점·팩터 충족률 90% 이상도 `OFF_WATCH` 관찰 전용이며 실제 추천 탭과 타이밍 엔진에 전달하지 않음
+- 동일 종목의 실제 추천은 14일 동안 다시 기록하지 않고, 관찰 신호는 `observations` 탭에서 종목당 한 행으로 갱신
 - KOSPI/KOSDAQ 지수의 60일선·200일선으로 시장국면 필터
 - KRX Data Marketplace Open API의 일별 전종목 OHLCV·시가총액·거래대금으로 유니버스와 가격 이력을 구성
 - `reports/daily_screen.csv`와 `reports/daily_screen.json` 생성
@@ -32,7 +35,7 @@ python daily_screener.py --as-of-date 20260710 --top-n 10
 매수·관찰 기준은 실행 시 조정할 수 있습니다.
 
 ```bash
-python daily_screener.py --min-score 82 --watch-score 75 --min-factor-coverage 0.70
+python daily_screener.py --min-score 82 --unknown-min-score 85 --off-watch-min-score 88 --watch-score 75 --min-factor-coverage 0.70
 ```
 
 재무 스냅샷은 로컬 CSV를 우선하고, 파일이 없으면 `DART_API_KEY`로 OpenDART를 조회합니다. 공시 제출기한을 기준으로 해당 날짜에 이미 공개됐을 정기보고서만 사용하므로 미래 공시를 과거 추천에 섞지 않습니다. 자체 CSV는 `data/fundamentals_latest.csv.example`의 컬럼을 따르며, `available_date`가 기준일 이후인 행은 자동 제외됩니다.
@@ -44,7 +47,7 @@ GitHub Actions의 일일 운영은 재무 데이터가 없으면 실패하도록
 `trade_timing.py`는 기존 추천 선별과 분리되어, 한 종목의 일별 OHLCV에서 매수·대기·보유·청산 시점을 계산합니다. 자동 주문이나 기존 추천 목록 기록은 하지 않습니다.
 
 - 매수: 20일 신고가 돌파와 거래량 확인(`BUY_NOW`), 또는 20일선 부근 상승 반전(`BUY_PULLBACK`)
-- 리스크 관리: 최초 2.5 ATR 손절, 1R 수익 이후 최고가 기준 3 ATR 트레일링스탑
+- 리스크 관리: 최초 2 ATR과 최대 손실 6% 중 더 엄격한 스탑, 수익률 10% 이후 최고가 대비 8%와 3 ATR 중 더 엄격한 트레일링스탑
 - 청산: 장중 스탑 도달은 스탑가, 갭하락은 시가로 계산
 
 신규 진입 타이밍 확인:
@@ -67,9 +70,10 @@ python trade_timing.py --recommendations-csv recommendations.csv --as-of-date 20
 
 ### GitHub Actions · Google Sheets · Telegram 연동
 
-`Independent Trade Timing Engine` 워크플로는 `Daily Multi-Factor Screener`가 성공적으로 끝난 뒤 별도로 실행됩니다. 기존 멀티팩터 추천의 Telegram 메시지와 `recommendations` 탭은 수정하지 않습니다.
+`Independent Trade Timing Engine` 워크플로는 `Daily Multi-Factor Screener`가 성공적으로 끝난 뒤 별도로 실행됩니다. 실제 `BUY_CANDIDATE`만 `recommendations` 탭을 통해 전달됩니다.
 
 - `recommendations`: 기존 멀티팩터 추천의 읽기 전용 원본
+- `observations`: `ENTRY_WATCH`·`OFF_WATCH`의 최근 상태를 종목당 한 행으로 갱신하는 관찰 전용 탭
 - `타이밍엔진_보유입력`: 실제 보유 종목을 직접 입력하는 탭 (`진입일 | 티커 | 종목명(선택) | 진입가(원) | 메모(선택)`)
 - `타이밍엔진_매수신호`: 최근 20일의 `daily_multifactor:` 추천만 대상으로 한 독립 매수 신호 자동 갱신 탭
 - `타이밍엔진_보유신호`: 보유입력 탭을 대상으로 한 ATR 스탑/청산 신호 자동 갱신 탭

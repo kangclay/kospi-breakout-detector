@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -66,13 +67,18 @@ class ScreenConfig:
     prefilter_limit: int = 300
     top_n: int = 10
     min_market_cap: float = 100_000_000_000.0
-    min_trading_value: float = 500_000_000.0
+    min_trading_value: float = 2_000_000_000.0
+    min_avg_trading_value20: float = 2_000_000_000.0
     min_history: int = 180
     # 2026-08-11 trailing-stop review: score >=82 was the first profitable
     # bucket; preserve the raw score but tighten the live entry threshold.
     min_score: float = 82.0
+    unknown_min_score: float = 85.0
+    off_watch_min_score: float = 88.0
     watch_score: float = 75.0
     min_factor_coverage: float = 0.70
+    off_watch_factor_coverage: float = 0.90
+    breakout_volume_multiple: float = 1.30
     request_sleep: float = 0.25
     allow_unknown_regime: bool = True
     fundamentals_path: str = "data/fundamentals_latest.csv"
@@ -163,6 +169,9 @@ def build_price_features(raw: pd.DataFrame, min_history: int = 180) -> dict:
     high120_prev = high.rolling(120).max().shift(1)
     high200_prev = high.rolling(200).max().shift(1)
     avg_volume20 = volume.rolling(20).mean()
+    trading_value = df["TradingValue"] if "TradingValue" in df.columns else close * volume
+    avg_trading_value20 = trading_value.rolling(20).mean()
+    high20_prev = high.rolling(20).max().shift(1)
 
     true_range = pd.concat(
         [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
@@ -198,6 +207,8 @@ def build_price_features(raw: pd.DataFrame, min_history: int = 180) -> dict:
         "dist_high120": current_close / _as_float(high120_prev.iloc[last]) - 1.0,
         "dist_high200": current_close / _as_float(high200_prev.iloc[last]) - 1.0,
         "volume_vs20": _as_float(volume.iloc[last]) / _as_float(avg_volume20.iloc[last]),
+        "avg_trading_value20": _as_float(avg_trading_value20.iloc[last]),
+        "breakout20": bool(current_close >= _as_float(high20_prev.iloc[last])),
         "atr_pct": _as_float(atr14.iloc[last]) / current_close,
         "volatility20": _as_float(volatility20.iloc[last]),
         "drawdown60": _as_float(drawdown60.iloc[last]),
@@ -543,16 +554,46 @@ def _safe_name(ticker: str) -> str:
         return ticker
 
 
+def _is_excluded_security(name: object) -> bool:
+    """Exclude non-common-stock structures that need a separate strategy."""
+    normalized = str(name or "").strip().upper().replace(" ", "")
+    if not normalized:
+        return False
+    return bool(
+        re.search(r"(?:\d+)?우(?:B|C)?$", normalized)
+        or "스팩" in normalized
+        or "SPAC" in normalized
+        or "리츠" in normalized
+    )
+
+
 def _assign_actions(result: pd.DataFrame, config: ScreenConfig) -> pd.DataFrame:
-    stock_buy_ok = (
+    regime = result["regime_state"].fillna("UNKNOWN")
+    required_score = np.select(
+        [regime.eq("OFF"), regime.eq("UNKNOWN")],
+        [config.off_watch_min_score, config.unknown_min_score],
+        default=config.min_score,
+    )
+    required_coverage = np.where(
+        regime.eq("OFF"), config.off_watch_factor_coverage, config.min_factor_coverage
+    )
+    stock_quality_ok = (
         result["trend_ok"]
         & result["not_chasing"]
-        & (result["score"] >= config.min_score)
-        & (result["factor_coverage"] >= config.min_factor_coverage)
+        & (result["avg_trading_value20"] >= config.min_avg_trading_value20)
+        & (result["score"] >= required_score)
+        & (result["factor_coverage"] >= required_coverage)
+    )
+    entry_confirmed = result["breakout20"] & (
+        result["volume_vs20"] >= config.breakout_volume_multiple
     )
     result["action"] = np.select(
-        [stock_buy_ok & result["regime_ok"], stock_buy_ok],
-        ["BUY_CANDIDATE", "STOCK_BUY_CANDIDATE"],
+        [
+            stock_quality_ok & regime.ne("OFF") & entry_confirmed,
+            stock_quality_ok & regime.ne("OFF"),
+            stock_quality_ok & regime.eq("OFF"),
+        ],
+        ["BUY_CANDIDATE", "ENTRY_WATCH", "OFF_WATCH"],
         default=np.where((result["score"] >= config.watch_score) & result["trend_ok"], "WATCH", "PASS"),
     )
     return result
@@ -570,6 +611,8 @@ def _prepare_market_rows(
         return pd.DataFrame(), {"market": market, "snapshot_count": 0, "prefilter_count": 0, "history_count": 0}
 
     snapshot = snapshot.copy()
+    if "name" in snapshot.columns:
+        snapshot = snapshot[~snapshot["name"].map(_is_excluded_security)].copy()
     snapshot = snapshot[
         (snapshot["market_cap"] >= config.min_market_cap)
         & (snapshot["trading_value_today"] >= config.min_trading_value)
@@ -696,8 +739,13 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
         "fundamentals_available": bool(not fundamentals.empty),
         "fundamentals_source": fundamentals_source,
         "min_score": config.min_score,
+        "unknown_min_score": config.unknown_min_score,
+        "off_watch_min_score": config.off_watch_min_score,
         "watch_score": config.watch_score,
         "min_factor_coverage": config.min_factor_coverage,
+        "off_watch_factor_coverage": config.off_watch_factor_coverage,
+        "min_avg_trading_value20": config.min_avg_trading_value20,
+        "breakout_volume_multiple": config.breakout_volume_multiple,
         "data_provider": "krx_open_api" if krx_open is not None else "legacy",
         "markets": [],
     }
@@ -717,7 +765,7 @@ def run_screen(config: ScreenConfig, asof_date: Optional[str] = None) -> tuple[p
 
     result = pd.concat(frames, ignore_index=True)
     stats["quality_proxy_available"] = bool("quality_proxy_available" in result.columns and result["quality_proxy_available"].any())
-    action_order = {"BUY_CANDIDATE": 0, "STOCK_BUY_CANDIDATE": 1, "WATCH": 2, "PASS": 3}
+    action_order = {"BUY_CANDIDATE": 0, "ENTRY_WATCH": 1, "OFF_WATCH": 2, "WATCH": 3, "PASS": 4}
     result = result.sort_values(["action", "score"], key=lambda column: column.map(action_order) if column.name == "action" else column, ascending=[True, False]).reset_index(drop=True)
     result["rank"] = np.arange(1, len(result) + 1)
     return result, stats
@@ -741,7 +789,11 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
         f"📊 Daily Multi-Factor Screen | 기준일 {stats.get('asof_date', 'N/A')}",
         f"시세 데이터: {'KRX Open API' if stats.get('data_provider') == 'krx_open_api' else 'legacy fallback'}",
         f"재무 스냅샷: {fundamental_status}",
-        f"매수 기준: 점수 ≥{_format_number(stats.get('min_score'), 1)}, 팩터 충족률 ≥{_format_number(_as_float(stats.get('min_factor_coverage')) * 100, 0)}%",
+        f"매수 기준: 시장 ON 점수 ≥{_format_number(stats.get('min_score'), 1)}, "
+        f"UNKNOWN ≥{_format_number(stats.get('unknown_min_score'), 1)}, "
+        f"팩터 충족률 ≥{_format_number(_as_float(stats.get('min_factor_coverage')) * 100, 0)}%",
+        f"진입 확인: 20일 고가 돌파 + 거래량 ≥20일 평균의 "
+        f"{_format_number(stats.get('breakout_volume_multiple'), 1)}배",
     ]
     for market_stat in stats.get("markets", []):
         regime = market_stat.get("regime", {})
@@ -749,11 +801,13 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
 
     if result.empty:
         lines.append("\n오늘의 BUY_CANDIDATE가 없습니다.")
-        lines.append("\n오늘의 STOCK_BUY_CANDIDATE가 없습니다.")
+        lines.append("\n오늘의 ENTRY_WATCH가 없습니다.")
+        lines.append("\n오늘의 OFF_WATCH가 없습니다.")
         return "\n".join(lines)
 
     candidates = result[result["action"] == "BUY_CANDIDATE"].head(top_n)
-    stock_candidates = result[result["action"] == "STOCK_BUY_CANDIDATE"].head(top_n)
+    entry_watch = result[result["action"] == "ENTRY_WATCH"].head(top_n)
+    off_watch = result[result["action"] == "OFF_WATCH"].head(top_n)
     watch = result[result["action"] == "WATCH"].head(max(3, top_n // 2))
     if candidates.empty:
         lines.append("\n오늘의 BUY_CANDIDATE가 없습니다.")
@@ -768,20 +822,29 @@ def build_message(result: pd.DataFrame, stats: dict, top_n: int) -> str:
                 f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
                 f"stop(ATR2)={_format_number(row.stop_price_atr2, 0)}"
             )
-    if not stock_candidates.empty:
-        lines.append("\n[STOCK_BUY_CANDIDATE · 시장국면 OFF]")
-        lines.append("※ 시장은 OFF이지만 종목 자체 매수 조건을 모두 충족한 후보입니다. 비중 축소 또는 추가 확인이 필요합니다.")
-        for row in stock_candidates.itertuples(index=False):
+    if not entry_watch.empty:
+        lines.append("\n[ENTRY_WATCH · 진입 확인 대기]")
+        lines.append("※ 종목 조건은 통과했지만 20일 고가 돌파·거래량 확인 전이므로 매수 신호가 아닙니다.")
+        for row in entry_watch.itertuples(index=False):
             name = getattr(row, "name", "") or _safe_name(row.ticker)
             lines.append(
                 f"- {row.ticker} {name} [{row.market}] "
                 f"score={_format_number(row.score, 1)} close={_format_number(row.close, 0)} "
-                f"mom={_format_number(row.momentum_score, 0)} value={_format_number(row.value_score, 0)} "
-                f"coverage={_format_number(row.factor_coverage * 100, 0)}% "
-                f"stop(ATR2)={_format_number(row.stop_price_atr2, 0)}"
+                f"volume/20d={_format_number(row.volume_vs20, 2)}x"
             )
     else:
-        lines.append("\n오늘의 STOCK_BUY_CANDIDATE가 없습니다.")
+        lines.append("\n오늘의 ENTRY_WATCH가 없습니다.")
+    if not off_watch.empty:
+        lines.append("\n[OFF_WATCH · 시장국면 OFF · 관찰 전용]")
+        lines.append("※ 실제 매수 추천이 아니며 recommendations 탭과 타이밍 엔진에 전달하지 않습니다.")
+        for row in off_watch.itertuples(index=False):
+            name = getattr(row, "name", "") or _safe_name(row.ticker)
+            lines.append(
+                f"- {row.ticker} {name} [{row.market}] "
+                f"score={_format_number(row.score, 1)} coverage={_format_number(row.factor_coverage * 100, 0)}%"
+            )
+    else:
+        lines.append("\n오늘의 OFF_WATCH가 없습니다.")
     if not watch.empty:
         lines.append("\n[WATCH]")
         for row in watch.itertuples(index=False):
@@ -863,24 +926,38 @@ def _log_sheet(result: pd.DataFrame) -> None:
         print("[INFO] 기록할 매수 후보가 없어 Google Sheets 추가를 건너뜁니다.")
         return
     try:
-        from sheet_logger import log_selection
+        from sheet_logger import log_observation, log_selection
     except Exception as exc:
         print(f"[WARN] sheet logger unavailable: {exc}")
         return
 
-    buy_actions = {"BUY_CANDIDATE", "STOCK_BUY_CANDIDATE"}
-    for row in result[result["action"].isin(buy_actions)].itertuples(index=False):
+    for row in result[result["action"] == "BUY_CANDIDATE"].itertuples(index=False):
         try:
-            strategy_prefix = "daily_multifactor:individual" if row.action == "STOCK_BUY_CANDIDATE" else "daily_multifactor"
-            log_selection(
+            logged = log_selection(
                 ticker=row.ticker,
                 name=getattr(row, "name", "") or _safe_name(row.ticker),
                 close_price=float(row.close),
-                method=f"{strategy_prefix}:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
+                method=f"daily_multifactor:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
+                when=datetime.strptime(str(row.data_date), "%Y-%m-%d"),
+            )
+            if not logged:
+                print(f"[INFO] {row.ticker} 최근 추천과 중복되어 recommendations 기록을 건너뜁니다.")
+        except Exception as exc:
+            print(f"[WARN] sheet log failed for {row.ticker}: {exc}")
+
+    observation_actions = {"ENTRY_WATCH", "OFF_WATCH"}
+    for row in result[result["action"].isin(observation_actions)].itertuples(index=False):
+        try:
+            log_observation(
+                ticker=row.ticker,
+                name=getattr(row, "name", "") or _safe_name(row.ticker),
+                close_price=float(row.close),
+                state=row.action,
+                method=f"daily_multifactor:watch:{row.market}:score={float(row.score):.1f}:coverage={float(row.factor_coverage):.2f}",
                 when=datetime.strptime(str(row.data_date), "%Y-%m-%d"),
             )
         except Exception as exc:
-            print(f"[WARN] sheet log failed for {row.ticker}: {exc}")
+            print(f"[WARN] observation sheet log failed for {row.ticker}: {exc}")
 
 
 def main() -> None:
@@ -889,10 +966,15 @@ def main() -> None:
     parser.add_argument("--prefilter-limit", type=int, default=300)
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--min-market-cap", type=float, default=100_000_000_000.0)
-    parser.add_argument("--min-trading-value", type=float, default=500_000_000.0)
+    parser.add_argument("--min-trading-value", type=float, default=ScreenConfig.min_trading_value)
+    parser.add_argument("--min-avg-trading-value20", type=float, default=ScreenConfig.min_avg_trading_value20)
     parser.add_argument("--min-score", type=float, default=ScreenConfig.min_score)
+    parser.add_argument("--unknown-min-score", type=float, default=ScreenConfig.unknown_min_score)
+    parser.add_argument("--off-watch-min-score", type=float, default=ScreenConfig.off_watch_min_score)
     parser.add_argument("--watch-score", type=float, default=ScreenConfig.watch_score)
     parser.add_argument("--min-factor-coverage", type=float, default=ScreenConfig.min_factor_coverage)
+    parser.add_argument("--off-watch-factor-coverage", type=float, default=ScreenConfig.off_watch_factor_coverage)
+    parser.add_argument("--breakout-volume-multiple", type=float, default=ScreenConfig.breakout_volume_multiple)
     parser.add_argument("--request-sleep", type=float, default=0.25)
     parser.add_argument("--fundamentals-path", default="data/fundamentals_latest.csv")
     parser.add_argument("--output-dir", default="reports")
@@ -910,9 +992,14 @@ def main() -> None:
         top_n=args.top_n,
         min_market_cap=args.min_market_cap,
         min_trading_value=args.min_trading_value,
+        min_avg_trading_value20=args.min_avg_trading_value20,
         min_score=args.min_score,
+        unknown_min_score=args.unknown_min_score,
+        off_watch_min_score=args.off_watch_min_score,
         watch_score=args.watch_score,
         min_factor_coverage=args.min_factor_coverage,
+        off_watch_factor_coverage=args.off_watch_factor_coverage,
+        breakout_volume_multiple=args.breakout_volume_multiple,
         request_sleep=args.request_sleep,
         fundamentals_path=args.fundamentals_path,
         require_fundamentals=args.require_fundamentals,

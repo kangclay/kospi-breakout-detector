@@ -10,8 +10,8 @@ Entry timing:
 * WAIT_BREAKOUT / WAIT_PULLBACK / AVOID: no entry yet.
 
 Position timing:
-* Initial stop: entry price minus 2.5 ATR(14).
-* Trail activates after a 1R gain and then trails at highest high minus 3 ATR.
+* Initial stop: tighter of entry price minus 2 ATR(14) and a 6% maximum loss.
+* Trail activates after a 10% gain and uses the tighter of 3 ATR or 8% from the high.
 * Stop fills model a downside gap at the opening price, otherwise at the stop.
 """
 
@@ -38,9 +38,11 @@ class TimingConfig:
     breakout_days: int = 20
     breakout_volume_multiple: float = 1.20
     pullback_atr_multiple: float = 0.50
-    initial_stop_atr_multiple: float = 2.50
-    trail_activation_r: float = 1.00
+    initial_stop_atr_multiple: float = 2.00
+    max_initial_loss_pct: float = 0.06
+    trail_activation_return: float = 0.10
     trail_atr_multiple: float = 3.00
+    trail_pct: float = 0.08
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,10 @@ def entry_timing(raw: pd.DataFrame, config: TimingConfig = TimingConfig()) -> di
     volume_ok = float(last.Volume) >= float(last.avg_volume20) * config.breakout_volume_multiple
     near_ma20 = ma20 <= close <= ma20 + atr * config.pullback_atr_multiple
     bullish_reversal = close > float(last.prev_close)
-    initial_stop = close - atr * config.initial_stop_atr_multiple
+    initial_stop = max(
+        close - atr * config.initial_stop_atr_multiple,
+        close * (1.0 - config.max_initial_loss_pct),
+    )
 
     common = {
         "as_of_date": pd.Timestamp(last.Date).strftime("%Y-%m-%d"),
@@ -143,7 +148,10 @@ def position_timing(raw: pd.DataFrame, position: Position, config: TimingConfig 
     if not np.isfinite(entry_atr) or entry_atr <= 0:
         return {"action": "INSUFFICIENT_DATA", "reason": "진입일 ATR을 계산할 수 없습니다."}
 
-    initial_stop = position.entry_price - entry_atr * config.initial_stop_atr_multiple
+    initial_stop = max(
+        position.entry_price - entry_atr * config.initial_stop_atr_multiple,
+        position.entry_price * (1.0 - config.max_initial_loss_pct),
+    )
     risk_per_share = position.entry_price - initial_stop
     high_water = position.entry_price
     stop_price = initial_stop
@@ -181,11 +189,15 @@ def position_timing(raw: pd.DataFrame, position: Position, config: TimingConfig 
             }
 
         high_water = max(high_water, high_price)
-        if high_water >= position.entry_price + risk_per_share * config.trail_activation_r:
+        if high_water >= position.entry_price * (1.0 + config.trail_activation_return):
             trail_active = True
         atr = _as_float(bar.atr14)
         if trail_active and np.isfinite(atr) and atr > 0:
-            stop_price = max(stop_price, high_water - atr * config.trail_atr_multiple)
+            stop_price = max(
+                stop_price,
+                high_water - atr * config.trail_atr_multiple,
+                high_water * (1.0 - config.trail_pct),
+            )
 
     last = frame.iloc[-1]
     result = {
